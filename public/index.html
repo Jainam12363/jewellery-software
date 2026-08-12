@@ -1,0 +1,1263 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>App Name</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+
+<body>
+  <header class="app-header">
+    <div class="header-inner">
+      <div>
+        <h1>App Name</h1>
+        <p class="subtitle">Customer &amp; jewellery records</p>
+      </div>
+      <div class="header-user">
+        <span id="userDisplay" class="user-display"></span>
+        <button type="button" id="logoutBtn" class="btn btn-logout">Log Out</button>
+      </div>
+    </div>
+  </header>
+
+  <nav class="tab-nav" role="tablist">
+    <div class="party-selector">
+      <label for="partySelect">Party</label>
+      <select id="partySelect">
+        <option value="Shop">Shop</option>
+        <option value="Ambika">Ambika</option>
+        <option value="Madhwan">Madhwan</option>
+        <option value="G.K">G.K</option>
+        <option value="Sangam">Sangam</option>
+      </select>
+    </div>
+    <div id="shopTabs" class="shop-tabs">
+      <div class="customer-dropdown">
+        <button
+          class="dropdown-btn"
+          id="customerDropdownBtn"
+          type="button"
+          aria-expanded="false"
+        >
+          <span class="dropdown-label">Customer</span>
+          <span class="dropdown-arrow">▼</span>
+        </button>
+
+        <div class="dropdown-content" id="customerDropdownMenu">
+
+          <button class="dropdown-item active" data-tab="add-customer">
+            Add Customer
+          </button>
+
+          <button class="dropdown-item" data-tab="edit-customer">
+            Edit Customer
+          </button>
+
+          <button class="dropdown-item" data-tab="release-customer">
+            Release Customer
+          </button>
+
+        </div>
+      </div>
+
+      
+      <div class="customer-dropdown">
+
+        <button
+          class="dropdown-btn"
+          id="othersDropdownBtn"
+          type="button"
+          aria-expanded="false"
+        >
+          <span class="dropdown-label">Transactions</span>
+          <span class="dropdown-arrow">▼</span>
+        </button>
+
+        <div class="dropdown-content" id="othersDropdownMenu">
+
+          <button
+              class="dropdown-item"
+              data-tab="interest-payment">
+
+              Interest Payment
+
+          </button>
+
+
+          <button class="dropdown-item" data-tab="topup">
+
+            Top-Up
+
+          </button>
+
+          <button class="dropdown-item" data-tab="paidup">
+
+            Paid-Up
+
+          </button>
+
+        </div>
+
+      </div>
+
+      <button
+          class="tab-btn"
+          data-tab="reports"
+          role="tab">
+
+          Reports
+
+      </button>
+
+      <div class="header-search">
+
+          <button
+              type="button"
+              id="headerSearchBtn"
+              class="search-icon-btn"
+              aria-label="Search">
+
+              🔍
+
+          </button>
+
+          <input
+              type="search"
+              id="headerSearchInput"
+              placeholder="Search by Packet No. or Customer Name"
+              autocomplete="off"
+              spellcheck="false">
+
+      </div>
+
+    </div>
+  </nav>
+
+  <main class="main-content">
+    <div id="partyEmptyState" class="party-empty-state" hidden></div>
+
+    <div id="shopContent">
+      <!-- Add Customer -->
+      <section id="add-customer" class="tab-panel active" role="tabpanel">
+        <h2>Add Customer Record</h2>
+        <form id="customerForm" class="form-grid">
+          <div class="form-group">
+            <label for="packetNo">Packet No.</label>
+            <input type="number" id="packetNo" name="packetNo" required min="1" placeholder="e.g. 7">
+          </div>
+          <div class="form-group">
+            <label for="customerName">Customer Name</label>
+            <input type="text" id="customerName" name="customerName" required placeholder="e.g. Rushabh">
+          </div>
+          <div class="form-group">
+            <label for="phoneNumber">Phone Number</label>
+            <input type="tel" id="phoneNumber" name="phoneNumber" required maxlength="10" placeholder="e.g. 9876543210">
+          </div>
+          <div class="form-group">
+            <label for="item">Item</label>
+            <select id="item" name="item" required>
+              <option value="">Select Item</option>
+              <option value="Gold">Gold</option>
+              <option value="Silver">Silver</option>
+              <option value="Both">Both (Gold & Silver)</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label for="itemName">Item Name</label>
+            <input type="text" id="itemName" name="itemName" required placeholder="e.g. Gold Chain">
+          </div>
+          <div class="form-group">
+            <label for="amount">Amount (₹)</label>
+            <input type="number" id="amount" name="amount" required min="0" step="0.01" placeholder="e.g. 100000">
+          </div>
+          <div class="form-group">
+            <label for="quantity">Quantity</label>
+            <input type="number" id="quantity" name="quantity" required min="1" placeholder="e.g. 1">
+          </div>
+          <div class="form-group">
+            <label for="weight">Weight (gm)</label>
+            <input type="number" id="weight" name="weight" required min="0" step="0.01" placeholder="e.g. 29.00">
+          </div>
+          <div class="form-group">
+            <label for="entryDate">Entry Date</label>
+            <input type="date" id="entryDate" name="entryDate" required>
+          </div>
+
+          <div class="form-group">
+            <label for="rateOfInterest">Rate of Interest (%)</label>
+            <input type="number" id="rateOfInterest" name="rateOfInterest" required min="0" step="0.01"
+              placeholder="e.g. 2">
+          </div>
+
+          <div class="form-actions full-width">
+            <button type="submit" class="btn btn-primary">Save Record</button>
+            <button type="reset" class="btn btn-secondary">Clear Form</button>
+          </div>
+        </form>
+        <div id="formMessage" class="message" hidden></div>
+      </section>
+
+
+
+      <section id="edit-customer" class="tab-panel" role="tabpanel" hidden>
+
+        <h2>Edit Customer</h2>
+
+        <div class="search-bar">
+
+          <div class="form-group">
+
+            <label for="editPacketNo">Packet No.</label>
+
+            <input type="number" id="editPacketNo" min="1" placeholder="Enter Packet Number">
+
+          </div>
+
+          <button type="button" id="editSearchBtn" class="btn btn-primary">
+
+            Search
+
+          </button>
+
+
+          <button type="button" id="editClearBtn" class="btn btn-secondary">
+
+            Clear
+
+          </button>
+
+        </div>
+
+        <form id="editCustomerForm" class="form-grid" hidden>
+
+          <div class="form-group">
+
+            <label for="editCustomerName">Customer Name</label>
+
+            <input type="text" id="editCustomerName" required>
+
+          </div>
+
+          <div class="form-group">
+
+            <label for="editPhoneNumber">Phone Number</label>
+
+            <input type="tel" id="editPhoneNumber" maxlength="10" required>
+
+          </div>
+
+          <div class="form-group">
+
+            <label for="editItem">Item</label>
+
+            <select id="editItem">
+
+              <option value="Gold">Gold</option>
+              <option value="Silver">Silver</option>
+              <option value="Both">Both (Gold & Silver)</option>
+
+            </select>
+
+          </div>
+
+          <div class="form-group">
+
+            <label for="editItemName">Item Name</label>
+
+            <input type="text" id="editItemName" required>
+
+          </div>
+
+          <div class="form-group">
+
+            <label for="editAmount">Amount</label>
+
+            <input type="number" id="editAmount" step="0.01" required>
+
+          </div>
+
+          <div class="form-group">
+
+            <label for="editQuantity">Quantity</label>
+
+            <input type="number" id="editQuantity" required>
+
+          </div>
+
+          <div class="form-group">
+
+            <label for="editWeight">Weight</label>
+
+            <input type="number" id="editWeight" step="0.01" required>
+
+          </div>
+
+          <div class="form-group">
+
+            <label for="editEntryDate">Entry Date</label>
+
+            <input type="date" id="editEntryDate" required>
+
+          </div>
+
+          <div class="form-group">
+
+            <label for="editRateOfInterest">Rate of Interest</label>
+
+            <input type="number" id="editRateOfInterest" step="0.01" required>
+
+          </div>
+
+          <div class="form-actions full-width">
+
+            <button type="submit" class="btn btn-primary">
+
+              Update Details
+
+            </button>
+
+          </div>
+
+        </form>
+
+        <div id="editMessage" class="message" hidden>
+        </div>
+
+      </section>
+
+
+
+      <!-- Release Customer -->
+
+      <section id="release-customer" class="tab-panel" role="tabpanel" hidden>
+
+        <h2>Release Customer</h2>
+
+        <div class="search-bar">
+
+          <div class="form-group">
+
+            <label for="releasePacketNo">
+
+              Packet No.
+
+            </label>
+
+            <input type="number" id="releasePacketNo" min="1" placeholder="Enter Packet Number">
+
+          </div>
+
+          <button type="button" id="releaseSearchBtn" class="btn btn-primary">
+
+            Search
+
+          </button>
+
+          <button type="button" id="releaseClearBtn" class="btn btn-secondary">
+
+            Clear
+
+          </button>
+
+        </div>
+
+        <form id="releaseCustomerForm" class="form-grid" hidden>
+
+          <div class="form-group">
+
+            <label>Customer Name</label>
+
+            <input type="text" id="releaseCustomerName" readonly>
+
+          </div>
+
+          <div class="form-group">
+
+            <label>Phone Number</label>
+
+            <input type="text" id="releasePhoneNumber" readonly>
+
+          </div>
+
+          <div class="form-group">
+
+            <label>Item</label>
+
+            <input type="text" id="releaseItem" readonly>
+
+          </div>
+
+          <div class="form-group">
+
+            <label>Item Name</label>
+
+            <input type="text" id="releaseItemName" readonly>
+
+          </div>
+
+          <div class="form-group">
+
+            <label>Amount</label>
+
+            <input type="number" id="releaseAmount" readonly>
+
+          </div>
+
+          <div class="form-group">
+
+            <label>Quantity</label>
+
+            <input type="number" id="releaseQuantity" readonly>
+
+          </div>
+
+          <div class="form-group">
+
+            <label>Weight</label>
+
+            <input type="number" id="releaseWeight" readonly>
+
+          </div>
+
+          <div class="form-group">
+
+            <label>Entry Date</label>
+
+            <input type="date" id="releaseEntryDate" readonly>
+
+          </div>
+
+          <div class="form-group">
+
+            <label>Rate Of Interest (%)</label>
+
+            <input type="number" id="releaseROI" readonly>
+
+          </div>
+
+          <div class="form-group">
+
+            <label>Release Date</label>
+
+            <input type="date" id="releaseDate" required>
+
+          </div>
+
+          <div class="form-group">
+
+            <label>Total Interest Till Release</label>
+
+            <input id="totalInterestTillRelease" readonly>
+
+          </div>
+
+          <div class="form-group">
+
+            <label>Interest Already Paid</label>
+
+            <input id="interestAlreadyPaid" readonly>
+
+          </div>
+
+          <div class="form-group">
+
+            <label>Remaining Interest To Pay</label>
+
+            <input id="interestToBePaid" readonly>
+
+          </div>
+
+          <div class="form-group">
+
+            <label>Total Recoverable</label>
+
+            <input id="totalRecoverable" readonly>
+
+          </div>
+
+          <div class="form-group">
+
+            <label>Grand Amount</label>
+
+            <input id="totalAmountWithInterest" readonly>
+
+          </div>
+
+          <div class="form-actions full-width">
+
+            <button type="submit" class="btn btn-primary">
+
+              Release Customer
+
+            </button>
+
+          </div>
+
+        </form>
+
+        <div id="releaseMessage" class="message" hidden>
+        </div>
+
+      </section>
+
+      <!-- Interest Payment -->
+
+
+      <section id="interest-payment" class="tab-panel" role="tabpanel" hidden>
+
+        <h2>Interest Payment</h2>
+
+        <div class="search-bar">
+
+          <div class="form-group">
+
+            <label for="interestPaymentPacketNo">
+
+              Packet No.
+
+            </label>
+
+            <input type="number" id="interestPaymentPacketNo" min="1" placeholder="Enter Packet Number">
+
+          </div>
+
+          <button type="button" id="interestPaymentSearchBtn" class="btn btn-primary">
+
+            Search
+
+          </button>
+
+          <button type="button" id="interestPaymentClearBtn" class="btn btn-secondary">
+
+            Clear
+
+          </button>
+
+        </div>
+
+        <form id="interestPaymentForm" class="form-grid" hidden>
+
+          <div class="form-group">
+
+            <label>Customer Name</label>
+
+            <input id="ipCustomerName" readonly>
+
+          </div>
+
+          <div class="form-group">
+
+            <label>Amount</label>
+
+            <input id="ipAmount" readonly>
+
+          </div>
+
+          <div class="form-group">
+
+            <label>Rate Of Interest</label>
+
+            <input id="ipROI" readonly>
+
+          </div>
+
+          <div class="form-group">
+
+            <label>Entry Date</label>
+
+            <input id="ipEntryDate" readonly>
+
+          </div>
+
+          <div class="form-group">
+
+            <label>Last Interest Paid Till</label>
+
+            <input id="lastInterestPaidTill" readonly>
+
+          </div>
+
+
+          <div class="form-group">
+
+            <label>Interest Start Date</label>
+
+            <input
+              type="date"
+              id="interestStartDate"
+              readonly>
+
+          </div>
+
+          <div class="form-group">
+
+            <label>Interest Paid Till</label>
+
+            <input type="date" id="interestPaidTill" required>
+
+          </div>
+
+
+          <div class="form-group">
+
+            <label>Interest Period</label>
+
+            <input id="interestPeriod" readonly>
+
+          </div>
+
+          <div class="form-group">
+
+            <label>Interest For This Payment</label>
+
+            <input id="interestAmount" readonly>
+
+          </div>
+
+          <div class="form-group">
+
+            <label>Total Interest Paid</label>
+
+            <input id="totalInterestPaid" readonly>
+
+          </div>
+
+          <div class="form-actions full-width">
+
+            <button type="submit" class="btn btn-primary">
+
+              Save Interest Payment
+
+            </button>
+
+          </div>
+
+        </form>
+
+        <div id="interestPaymentMessage" class="message" hidden>
+
+        </div>
+
+        <div id="interestHistory" class="results-container">
+
+            <p class="empty-state">
+                Search a customer to view Interest Payment history.
+            </p>
+
+        </div>
+
+      </section>
+
+      <!-- Reports -->
+
+      <section id="reports" class="tab-panel" role="tabpanel" hidden>
+
+        <div class="reports-header">
+
+          <h2>Reports</h2>
+
+          <p class="reports-subtitle">
+            Customer and financial reports
+          </p>
+
+        </div>
+
+
+        <!-- Report Type Toggle -->
+
+        <div class="report-type-toggle" role="tablist" aria-label="Report Type">
+
+          <button
+            type="button"
+            id="existingCustomersReportBtn"
+            class="report-toggle-btn active"
+            data-report-type="existing"
+            role="tab"
+            aria-selected="true">
+
+            Existing Customers
+
+          </button>
+
+          <button
+            type="button"
+            id="releasedCustomersReportBtn"
+            class="report-toggle-btn"
+            data-report-type="released"
+            role="tab"
+            aria-selected="false">
+
+            Released Customers
+
+          </button>
+
+        </div>
+
+
+        <!-- Report Date -->
+
+        <div class="report-controls">
+
+          <div class="form-group">
+
+            <label for="reportTillDate">
+              Calculate Till Date
+            </label>
+
+            <input
+              type="date"
+              id="reportTillDate">
+
+          </div>
+
+        </div>
+
+
+        <!-- Report Content -->
+
+        <div id="reportContent">
+
+          <!-- Summary -->
+
+          <div class="report-summary-section">
+
+            <h3>Report Summary</h3>
+
+            <div
+              id="reportSummary"
+              class="report-summary-grid">
+
+              <!-- Summary cards will be generated by app.js -->
+
+            </div>
+
+          </div>
+
+
+          <!-- Customer Table -->
+
+          <div class="report-table-section">
+
+            <div class="report-table-header">
+
+              <div>
+
+                <h3 id="reportTableTitle">
+                  Existing Customers
+                </h3>
+
+                <p
+                  id="reportDateLabel"
+                  class="report-date-label">
+                </p>
+
+              </div>
+
+              <button
+                type="button"
+                id="printReportBtn"
+                class="btn btn-primary">
+
+                🖨 Print Report
+
+              </button>
+
+            </div>
+
+
+            <div class="report-table-wrapper">
+
+                <button
+                    type="button"
+                    id="reportScrollLeft"
+                    class="report-scroll-arrow report-scroll-left"
+                    aria-label="Scroll table left"
+                    title="Scroll left">
+
+                    <span aria-hidden="true">‹</span>
+
+                </button>
+
+                <div
+                    id="reportTableContainer"
+                    class="report-table-container">
+
+                    <!-- Report table will be generated by app.js -->
+
+                </div>
+
+                <button
+                    type="button"
+                    id="reportScrollRight"
+                    class="report-scroll-arrow report-scroll-right"
+                    aria-label="Scroll table right"
+                    title="Scroll right">
+
+                    <span aria-hidden="true">›</span>
+
+                </button>
+
+            </div>
+
+          </div>
+
+        </div>
+
+
+        <!-- Empty / Loading State -->
+
+        <div
+          id="reportEmptyState"
+          class="empty-state"
+          hidden>
+
+        </div>
+
+      </section>
+
+      <!-- Search -->
+      <section id="search" class="tab-panel" role="tabpanel" hidden>
+        <h2>Customer Ledger</h2>
+
+        <div class="search-bar">
+
+            <button
+                type="button"
+                id="clearSearchBtn"
+                class="btn btn-secondary">
+
+                Clear
+
+            </button>
+
+        </div>
+
+        <div id="ledgerContent">
+
+            <div id="searchResults" class="results-container">
+
+                <p class="empty-state">
+
+                    Search a customer to view the complete ledger.
+
+                </p>
+
+            </div>
+
+        </div>
+      </section>
+
+
+      <!-- Top-Up -->
+      <section id="topup" class="tab-panel" role="tabpanel" hidden>
+
+        <h2>Top-Up (Addition)</h2>
+
+        <!-- Search -->
+        <div class="search-bar">
+
+          <div class="form-group">
+
+            <label for="topupPacketNo">
+              Packet No.
+            </label>
+
+            <input type="number" id="topupPacketNo" min="1" placeholder="Enter Packet Number">
+
+          </div>
+
+          <button type="button" id="topupSearchBtn" class="btn btn-primary">
+
+            Search
+
+          </button>
+
+          <button type="button" id="topupClearBtn" class="btn btn-secondary">
+
+            Clear
+
+          </button>
+
+        </div>
+
+        <!-- Customer Details -->
+
+        <form id="topupForm" class="form-grid" hidden>
+
+          <div class="form-group">
+
+            <label>Customer Name</label>
+
+            <input id="topupCustomerName" readonly>
+
+          </div>
+
+          <div class="form-group">
+
+            <label>Phone Number</label>
+
+            <input id="topupPhoneNumber" readonly>
+
+          </div>
+
+          <div class="form-group">
+
+            <label>Current Principal</label>
+
+            <input id="topupCurrentAmount" readonly>
+
+          </div>
+
+          <div class="form-group">
+
+            <label>Rate Of Interest (%)</label>
+
+            <input id="topupROI" readonly>
+
+          </div>
+
+          <div class="form-group">
+
+            <label>Entry Date</label>
+
+            <input id="topupEntryDate" readonly>
+
+          </div>
+
+          <div class="form-group">
+
+            <label>Last Interest Paid Till</label>
+
+            <input id="topupLastInterestPaid" readonly>
+
+          </div>
+
+          <div class="full-width section-divider">
+            <h3>Transaction Details</h3>
+          </div>
+
+          <!-- Transaction -->
+
+          <div class="form-group">
+
+            <label>Top-Up Date</label>
+
+            <input type="date" id="topupDate" required>
+
+          </div>
+
+          <div class="form-group">
+
+            <label>Top-Up Amount (₹)</label>
+
+            <input type="number" id="topupAmount" min="1" step="0.01" required>
+
+          </div>
+
+          <div class="full-width section-divider">
+            <h3>Preview</h3>
+          </div>
+
+          <!-- Preview -->
+
+          <div class="form-group">
+
+            <label>Principal Before</label>
+
+            <input id="principalBeforeTopup" readonly>
+
+          </div>
+
+          <div class="form-group">
+
+            <label>Principal After Top-Up</label>
+
+            <input id="principalAfterTopup" readonly>
+
+          </div>
+
+          <div class="form-actions full-width">
+
+            <button type="submit" class="btn btn-primary">
+
+              Save Top-Up
+
+            </button>
+
+          </div>
+
+        </form>
+
+        <div id="topupMessage" class="message" hidden>
+
+        </div>
+
+        <div id="topupHistory" class="results-container">
+
+          <p class="empty-state">
+
+            Search a customer to view Top-Up history.
+
+          </p>
+
+        </div>
+
+      </section>
+
+
+      <!-- Paid Up -->
+
+      <section id="paidup" class="tab-panel" role="tabpanel" hidden>
+
+        <h2>Paid-Up (Reduction)</h2>
+
+        <!-- Search -->
+        <div class="search-bar">
+
+          <div class="form-group">
+
+            <label for="paidupPacketNo">
+              Packet No.
+            </label>
+
+            <input type="number" id="paidupPacketNo" min="1" placeholder="Enter Packet Number">
+
+          </div>
+
+          <button type="button" id="paidupSearchBtn" class="btn btn-primary">
+
+            Search
+
+          </button>
+
+          <button type="button" id="paidupClearBtn" class="btn btn-secondary">
+
+            Clear
+
+          </button>
+
+        </div>
+
+        <!-- Customer Details -->
+
+        <form id="paidupForm" class="form-grid" hidden>
+
+          <div class="form-group">
+
+            <label>Customer Name</label>
+
+            <input id="paidupCustomerName" readonly>
+
+          </div>
+
+          <div class="form-group">
+
+            <label>Phone Number</label>
+
+            <input id="paidupPhoneNumber" readonly>
+
+          </div>
+
+          <div class="form-group">
+
+            <label>Current Principal</label>
+
+            <input id="paidupCurrentAmount" readonly>
+
+          </div>
+
+          <div class="form-group">
+
+            <label>Rate Of Interest (%)</label>
+
+            <input id="paidupROI" readonly>
+
+          </div>
+
+          <div class="form-group">
+
+            <label>Entry Date</label>
+
+            <input id="paidupEntryDate" readonly>
+
+          </div>
+
+          <div class="form-group">
+
+            <label>Last Interest Paid Till</label>
+
+            <input id="paidupLastInterestPaid" readonly>
+
+          </div>
+
+          <div class="full-width section-divider">
+            <h3>Transaction Details</h3>
+          </div>
+
+          <!-- Transaction -->
+
+          <div class="form-group">
+
+            <label>Paid-Up Date</label>
+
+            <input type="date" id="paidupDate" required>
+
+          </div>
+
+          <div class="form-group">
+
+            <label>Paid-Up Amount (₹)</label>
+
+            <input type="number" id="paidupAmount" min="1" step="0.01" required>
+
+          </div>
+
+          <div class="full-width section-divider">
+            <h3>Preview</h3>
+          </div>
+
+          <!-- Preview -->
+
+          <div class="form-group">
+
+            <label>Principal Before</label>
+
+            <input id="principalBeforePaidup" readonly>
+
+          </div>
+
+          <div class="form-group">
+
+            <label>Principal After Paid-Up</label>
+
+            <input id="principalAfterPaidup" readonly>
+
+          </div>
+
+          <div class="form-actions full-width">
+
+            <button type="submit" class="btn btn-primary">
+
+              Save Paid-Up
+
+            </button>
+
+          </div>
+
+        </form>
+
+        <div id="paidupMessage" class="message" hidden>
+
+        </div>
+
+        <div id="paidupHistory" class="results-container">
+
+          <p class="empty-state">
+
+            Search a customer to view Paid-Up history.
+
+          </p>
+
+        </div>
+
+      </section>
+      
+    </div>
+  </main>
+
+  <!-- Delete Customer Modal -->
+
+  <div id="deleteCustomerModal" class="modal-overlay hidden">
+
+      <div class="delete-modal">
+
+          <h2>🗑 Delete Customer</h2>
+
+          <div class="delete-info">
+
+              <p>
+                  <strong>Customer Name :</strong>
+                  <span id="deleteCustomerName"></span>
+              </p>
+
+              <p>
+                  <strong>Packet Number :</strong>
+                  <span id="deletePacketNo"></span>
+              </p>
+
+          </div>
+
+          <p class="delete-message">
+
+              This customer and all associated records will be permanently deleted.
+
+          </p>
+
+          <p class="delete-warning">
+
+              ⚠ This action cannot be undone.
+
+          </p>
+
+          <label for="deleteConfirmInput">
+
+              Type the packet number to continue
+
+          </label>
+
+          <input
+              type="text"
+              id="deleteConfirmInput"
+              autocomplete="off">
+
+          <div class="delete-actions">
+
+              <button
+                  type="button"
+                  id="cancelDeleteBtn"
+                  class="btn btn-secondary">
+
+                  Cancel
+
+              </button>
+
+              <button
+                  type="button"
+                  id="confirmDeleteBtn"
+                  class="btn btn-danger"
+                  disabled>
+
+                  Delete Customer
+
+              </button>
+
+          </div>
+
+      </div>
+
+  </div>
+
+
+
+  <div
+      id="successToast"
+      class="success-toast">
+
+  </div>
+
+  <div
+      id="errorToast"
+      class="success-toast error-toast">
+
+  </div>
+
+  <script src="vendor/jspdf.umd.min.js"></script>
+  <script src="vendor/jspdf.plugin.autotable.min.js"></script>
+ 
+  <script src="auth.js"></script>
+  <script src="app.js"></script>
+</body>
+
+</html>
