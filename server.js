@@ -654,8 +654,13 @@ app.post(
 app.post(
   '/api/auth/login',
   [
-    body('identifier').trim().notEmpty().withMessage('Username or email is required.'),
-    body('password').notEmpty().withMessage('Password is required.'),
+    body('identifier')
+      .trim()
+      .isLength({ min: 1, max: 254 })
+      .withMessage('Username or email is invalid.'),
+    body('password')
+      .isLength({ min: 1, max: 128 })
+      .withMessage('Invalid password.'),
   ],
   async (req, res) => {
     if (validationErrors(req, res)) return;
@@ -1042,9 +1047,22 @@ app.get(
   '/api/records',
   authenticate,
   [
-    query('party').optional().trim(),
-    query('packetNo').optional().isInt({ min: 1 }),
-    query('name').optional().trim(),
+    query('party')
+      .optional()
+      .trim()
+      .isLength({ max: 30 })
+      .withMessage('Invalid party.'),
+
+    query('packetNo')
+      .optional()
+      .isInt({ min: 1, max: 1000000000 })
+      .withMessage('Invalid packet number.'),
+
+    query('name')
+      .optional()
+      .trim()
+      .isLength({ max: 100 })
+      .withMessage('Invalid customer name.'),
   ],
   (req, res) => {
     if (validationErrors(req, res)) return;
@@ -1099,9 +1117,31 @@ app.get(
 );
 
 
-app.get('/api/ledger', authenticate, (req, res) => {
+app.get(
+  '/api/ledger',
+  authenticate,
+  [
+    query('party')
+      .trim()
+      .isLength({ min: 1, max: 30 })
+      .withMessage('Invalid party.'),
+
+    query('packetNo')
+      .optional()
+      .isInt({ min: 1, max: 1000000000 })
+      .withMessage('Invalid packet number.'),
+
+    query('name')
+      .optional()
+      .trim()
+      .isLength({ max: 100 })
+      .withMessage('Invalid customer name.'),
+  ],
+  (req, res) => {
 
     try {
+
+        if (validationErrors(req, res)) return;
 
         const { packetNo, name, party } = req.query;
 
@@ -1229,7 +1269,10 @@ app.post(
   authenticate,
   requireCsrf,
   [
-    body('party').trim().notEmpty(),
+    body('party')
+      .trim()
+      .isLength({ min: 1, max: 30 })
+      .withMessage('Invalid party.'),
     body('packetNo').isInt({ min: 1 }),
     body('customerName').trim().isLength({ min: 1, max: 100 }),
     body('phoneNumber')
@@ -1241,11 +1284,30 @@ app.post(
       .isIn(['Gold', 'Silver', 'Both'])
       .withMessage('Invalid item.'),
     body('itemName').trim().isLength({ min: 1, max: 100 }),
-    body('amount').isFloat({ min: 0 }),
-    body('quantity').isInt({ min: 1 }),
-    body('weight').isFloat({ min: 0 }),
+
+    body('amount')
+      .isFloat({ min: 0, max: 1000000000 })
+      .withMessage('Invalid amount.')
+      .custom(Number.isFinite)
+      .withMessage('Amount must be a finite number.'),
+
+    body('quantity')
+      .isInt({ min: 1, max: 100000 })
+      .withMessage('Invalid quantity.'),
+
+    body('weight')
+      .isFloat({ min: 0, max: 1000000 })
+      .withMessage('Invalid weight.')
+      .custom(Number.isFinite)
+      .withMessage('Weight must be a finite number.'),
+
     body('entryDate').isISO8601({ strict: false }),
-    body('rateOfInterest').isFloat({ min: 0 }),
+
+    body('rateOfInterest')
+      .isFloat({ min: 0, max: 100 })
+      .withMessage('Invalid interest rate.')
+      .custom(Number.isFinite)
+      .withMessage('Interest rate must be a finite number.'),
   ],
   (req, res) => {
     if (validationErrors(req, res)) return;
@@ -1329,9 +1391,16 @@ app.post(
   authenticate,
   requireCsrf,
   [
-    body('party').trim().notEmpty(),
+    body('party')
+      .trim()
+      .isLength({ min: 1, max: 30 })
+      .withMessage('Invalid party.'),
     body('packetNo').isInt({ min: 1 }),
-    body('amount').isFloat({ min: 0.01 }),
+    body('amount')
+      .isFloat({ min: 0.01, max: 1000000000 })
+      .withMessage('Invalid top-up amount.')
+      .custom(Number.isFinite)
+      .withMessage('Top-up amount must be a finite number.'),
     body('date').isISO8601({ strict: false }),
   ],
   (req, res) => {
@@ -1409,9 +1478,16 @@ app.post(
   authenticate,
   requireCsrf,
   [
-    body('party').trim().notEmpty(),
+    body('party')
+      .trim()
+      .isLength({ min: 1, max: 30 })
+      .withMessage('Invalid party.'),
     body('packetNo').isInt({ min: 1 }),
-    body('amount').isFloat({ min: 0.01 }),
+    body('amount')
+      .isFloat({ min: 0.01, max: 1000000000 })
+      .withMessage('Invalid paid-up amount.')
+      .custom(Number.isFinite)
+      .withMessage('Paid-up amount must be a finite number.'),
     body('date').isISO8601({ strict: false }),
   ],
   (req, res) => {
@@ -1492,7 +1568,10 @@ app.put(
   authenticate,
   requireCsrf,
   [
-    body('party').trim().notEmpty(),
+    body('party')
+      .trim()
+      .isLength({ min: 1, max: 30 })
+      .withMessage('Invalid party.'),
     body('packetNo').isInt({ min: 1 }),
 
     body('customerName').trim().isLength({ min: 1, max: 100 }),
@@ -1508,15 +1587,29 @@ app.put(
 
     body('itemName').trim().isLength({ min: 1, max: 100 }),
 
-    body('amount').isFloat({ min: 0 }),
+    body('amount')
+      .isFloat({ min: 0, max: 1000000000 })
+      .withMessage('Invalid amount.')
+      .custom(Number.isFinite)
+      .withMessage('Amount must be a finite number.'),
 
-    body('quantity').isInt({ min: 1 }),
+    body('quantity')
+      .isInt({ min: 1, max: 100000 })
+      .withMessage('Invalid quantity.'),
 
-    body('weight').isFloat({ min: 0 }),
+    body('weight')
+      .isFloat({ min: 0, max: 1000000 })
+      .withMessage('Invalid weight.')
+      .custom(Number.isFinite)
+      .withMessage('Weight must be a finite number.'),
 
     body('entryDate').isISO8601({ strict: false }),
 
-    body('rateOfInterest').isFloat({ min: 0 }),
+    body('rateOfInterest')
+      .isFloat({ min: 0, max: 100 })
+      .withMessage('Invalid interest rate.')
+      .custom(Number.isFinite)
+      .withMessage('Interest rate must be a finite number.'),
   ],
 
   (req, res) => {
@@ -1632,7 +1725,10 @@ app.put(
   authenticate,
   requireCsrf,
   [
-    body('party').trim().notEmpty(),
+    body('party')
+      .trim()
+      .isLength({ min: 1, max: 30 })
+      .withMessage('Invalid party.'),
     body('packetNo').isInt({ min: 1 }),
     body('releaseDate').isISO8601({ strict: false }),
   ],
@@ -2108,7 +2204,10 @@ app.post(
 
   [
 
-    body('party').trim().notEmpty(),
+    body('party')
+      .trim()
+      .isLength({ min: 1, max: 30 })
+      .withMessage('Invalid party.'),
 
     body('packetNo').isInt({ min: 1 }),
 
