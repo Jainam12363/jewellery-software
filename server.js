@@ -654,20 +654,26 @@ app.post(
 app.post(
   '/api/auth/login',
   [
-    body('username').trim().notEmpty().withMessage('Username is required.'),
+    body('identifier').trim().notEmpty().withMessage('Username or email is required.'),
     body('password').notEmpty().withMessage('Password is required.'),
   ],
   async (req, res) => {
     if (validationErrors(req, res)) return;
 
-    const username = req.body.username.trim();
+    const identifier = req.body.identifier.trim();
     const password = req.body.password;
 
-    const user = db.prepare('SELECT * FROM users WHERE username = ? COLLATE NOCASE').get(username);
+    const user = db.prepare(`
+      SELECT *
+      FROM users
+      WHERE username = ? COLLATE NOCASE
+        OR email = ? COLLATE NOCASE
+    `).get(identifier, identifier);
+
 
     if (!user) {
       await bcrypt.hash(password, BCRYPT_ROUNDS);
-      return res.status(401).json({ error: 'Invalid username or password.' });
+      return res.status(401).json({ error: 'Invalid username/email or password.' });
     }
 
     if (user.locked_until && new Date(user.locked_until) > new Date()) {
@@ -694,7 +700,7 @@ app.post(
           error: 'Too many failed attempts. Account locked for 15 minutes.',
         });
       }
-      return res.status(401).json({ error: 'Invalid username or password.' });
+      return res.status(401).json({ error: 'Invalid username/email or password.' });
     }
 
     db.prepare(
@@ -1093,7 +1099,7 @@ app.get(
 );
 
 
-app.get('/api/ledger', (req, res) => {
+app.get('/api/ledger', authenticate, (req, res) => {
 
     try {
 
@@ -1106,9 +1112,11 @@ app.get('/api/ledger', (req, res) => {
             row = db.prepare(`
                 SELECT *
                 FROM records
-                WHERE party = ?
+                WHERE user_id = ?
+                  AND party = ?
                   AND packet_no = ?
             `).get(
+                req.user.id,
                 party,
                 packetNo
             );
@@ -1119,10 +1127,12 @@ app.get('/api/ledger', (req, res) => {
             const rows = db.prepare(`
                 SELECT *
                 FROM records
-                WHERE party = ?
+                WHERE user_id = ?
+                  AND party = ?
                   AND customer_name LIKE ?
                 ORDER BY customer_name
             `).all(
+                req.user.id,
                 party,
                 `%${name}%`
             );
@@ -1639,16 +1649,21 @@ app.put(
 
     const row = db.prepare(
       `SELECT *
-       FROM records
-       WHERE user_id = ?
-       AND party = ?
-       AND packet_no = ?`
+      FROM records
+      WHERE user_id = ?
+      AND party = ?
+      AND packet_no = ?`
     ).get(
       req.user.id,
       party,
       packetNo
     );
 
+    if (!row) {
+      return res.status(404).json({
+        error: 'Customer not found.'
+      });
+    }
 
     const interestHistory = db.prepare(`
         SELECT
@@ -1669,11 +1684,6 @@ app.put(
         ? interestHistory[interestHistory.length - 1].interest_paid_till
         : null;
 
-    if (!row) {
-      return res.status(404).json({
-        error: 'Customer not found.'
-      });
-    }
 
     if (row.status === 'RELEASED') {
       return res.status(400).json({
@@ -2326,15 +2336,6 @@ app.use((_req, res) => {
 });
 
 
-app.get('/debug-record/:packetNo', (req, res) => {
-
-    const row = db.prepare(
-        'SELECT amount, top_ups, paid_ups FROM records WHERE packet_no = ?'
-    ).get(Number(req.params.packetNo));
-
-    res.json(row);
-
-});
 
 const server = app.listen(PORT, () => {
   console.log(`Manibhadra Jewellers running at http://localhost:${PORT}`);

@@ -16,11 +16,11 @@ loginForm.addEventListener('submit', async (e) => {
     e.preventDefault();
     loginMessage.hidden = true;
 
-    const username = document.getElementById('username').value.trim();
+    const identifier = document.getElementById('identifier').value.trim();
     const password = document.getElementById('password').value;
 
-    if (!username || !password) {
-    showAuthMessage(loginMessage, 'Please enter username and password.', 'error');
+    if (!identifier || !password) {
+    showAuthMessage(loginMessage, 'Please enter username/email and password.', 'error');
     return;
     }
 
@@ -29,7 +29,7 @@ loginForm.addEventListener('submit', async (e) => {
     try {
     const data = await apiRequest('/api/auth/login', {
         method: 'POST',
-        body: JSON.stringify({ username, password }),
+        body: JSON.stringify({ identifier, password }),
     });
     currentUser = data.user;
     csrfToken = data.csrfToken;
