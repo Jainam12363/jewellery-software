@@ -873,9 +873,6 @@ async function confirmDeleteCustomer() {
 
         currentLedgerData = null;
 
-        document.getElementById("searchPacketNo").value = "";
-        document.getElementById("searchName").value = "";
-
         document.getElementById("searchResults").innerHTML = `
             <p class="empty-state">
                 Search a customer to view the complete ledger.
@@ -950,10 +947,6 @@ async function deleteCustomer() {
         );
 
         currentLedgerData = null;
-
-        document.getElementById("searchPacketNo").value = "";
-
-        document.getElementById("searchName").value = "";
 
         document.getElementById("searchResults").innerHTML = `
 
