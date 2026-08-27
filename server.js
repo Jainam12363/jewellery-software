@@ -34,6 +34,31 @@ if (!fs.existsSync(dataDir)) fs.mkdirSync(dataDir, { recursive: true });
 const db = new Database(path.join(dataDir, 'manibhadra.db'));
 db.pragma('journal_mode = WAL');
 
+const backupDir = path.join(__dirname, 'backups');
+
+if (!fs.existsSync(backupDir)) {
+  fs.mkdirSync(backupDir, { recursive: true });
+}
+
+async function createDatabaseBackup() {
+  try {
+    const timestamp = new Date()
+      .toISOString()
+      .replace(/[:.]/g, '-');
+
+    const backupPath = path.join(
+      backupDir,
+      `manibhadra-${timestamp}.db`
+    );
+
+    await db.backup(backupPath);
+
+    console.log(`Database backup created: ${backupPath}`);
+  } catch (err) {
+    console.error('DATABASE BACKUP ERROR:', err.message);
+  }
+}
+
 db.exec(`
   CREATE TABLE IF NOT EXISTS users (
     id TEXT PRIMARY KEY,
@@ -596,6 +621,12 @@ const authLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
   message: { error: 'Too many attempts. Please wait and try again.' },
+  handler: (req, res) => {
+    console.warn(`SECURITY: Authentication rate limit exceeded for ${req.path}.`);
+    res.status(429).json({
+      error: 'Too many attempts. Please wait and try again.'
+    });
+  },
 });
 
 const apiLimiter = rateLimit({
@@ -682,6 +713,7 @@ app.post(
 
     if (!user) {
       await bcrypt.hash(password, BCRYPT_ROUNDS);
+      console.warn('SECURITY: Failed login attempt - account not found.');
       return res.status(401).json({ error: 'Invalid username/email or password.' });
     }
 
@@ -696,6 +728,7 @@ app.post(
 
     if (!passwordValid) {
       const attempts = user.failed_login_attempts + 1;
+      console.warn(`SECURITY: Failed login attempt for user ID ${user.id}.`);
       let lockedUntil = null;
       if (attempts >= LOCKOUT_ATTEMPTS) {
         lockedUntil = new Date(Date.now() + LOCKOUT_DURATION_MS).toISOString();
@@ -715,6 +748,8 @@ app.post(
     db.prepare(
       `UPDATE users SET failed_login_attempts = 0, locked_until = NULL WHERE id = ?`
     ).run(user.id);
+
+    console.log(`SECURITY: Successful login for user ID ${user.id}.`);
 
     revokeCsrfTokensForUser(user.id);
     const token = signToken(user);
@@ -2445,6 +2480,7 @@ const server = app.listen(PORT, () => {
   if (!IS_PRODUCTION) {
     console.log(`Open http://localhost:${PORT}/login.html in your browser.`);
   }
+  createDatabaseBackup();
 });
 
 server.on('error', (err) => {
@@ -2459,3 +2495,22 @@ server.on('error', (err) => {
   }
   throw err;
 });
+
+async function shutdown(signal) {
+  console.log(`${signal} received. Shutting down safely...`);
+
+  server.close(async () => {
+    try {
+      await createDatabaseBackup();
+      db.close();
+      console.log('Database closed. Server shutdown complete.');
+      process.exit(0);
+    } catch (err) {
+      console.error('Shutdown error:', err.message);
+      process.exit(1);
+    }
+  });
+}
+
+process.on('SIGINT', () => shutdown('SIGINT'));
+process.on('SIGTERM', () => shutdown('SIGTERM'));
