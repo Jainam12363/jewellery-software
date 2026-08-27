@@ -1261,7 +1261,7 @@ app.get(
         console.error(err);
 
         res.status(500).json({
-            error: err.message
+            error: 'Internal server error.'
         });
 
     }
