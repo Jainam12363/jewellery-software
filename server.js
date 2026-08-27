@@ -568,6 +568,10 @@ const app = express();
 
 app.use(
   helmet({
+    strictTransportSecurity: IS_PRODUCTION
+      ? undefined
+      : false,
+
     contentSecurityPolicy: {
       directives: {
         defaultSrc: ["'self'"],
