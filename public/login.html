@@ -21,7 +21,37 @@
         </div>
         <div class="form-group">
           <label for="password">Password</label>
-          <input type="password" id="password" name="password" autocomplete="current-password" required placeholder="Your password">
+
+          <div class="password-wrapper">
+            <input
+              type="password"
+              id="password"
+              name="password"
+              autocomplete="current-password"
+              required
+              placeholder="Your password"
+            >
+
+            <button
+              type="button"
+              class="password-toggle"
+              id="passwordToggle"
+              aria-label="Show password"
+              title="Show password"
+            >
+              <svg class="eye-icon" viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6S2 12 2 12Z"></path>
+                <circle cx="12" cy="12" r="3"></circle>
+              </svg>
+
+              <svg class="eye-off-icon" viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M2 12s3.5-6 10-6c2.1 0 3.9.6 5.4 1.5"></path>
+                <path d="M22 12s-3.5 6-10 6c-2.1 0-3.9-.6-5.4-1.5"></path>
+                <path d="M3 3l18 18"></path>
+                <path d="M10.6 10.6a2 2 0 0 0 2.8 2.8"></path>
+              </svg>
+            </button>
+          </div>
         </div>
         <button type="submit" class="btn btn-primary btn-full" id="loginBtn">Sign In</button>
       </form>

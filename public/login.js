@@ -12,6 +12,27 @@ const loginForm = document.getElementById('loginForm');
 const loginMessage = document.getElementById('loginMessage');
 const loginBtn = document.getElementById('loginBtn');
 
+const passwordInput = document.getElementById('password');
+const passwordToggle = document.getElementById('passwordToggle');
+
+passwordToggle.addEventListener('click', () => {
+    const isHidden = passwordInput.type === 'password';
+
+    passwordInput.type = isHidden ? 'text' : 'password';
+
+    passwordToggle.classList.toggle('showing', isHidden);
+
+    passwordToggle.setAttribute(
+        'aria-label',
+        isHidden ? 'Hide password' : 'Show password'
+    );
+
+    passwordToggle.setAttribute(
+        'title',
+        isHidden ? 'Hide password' : 'Show password'
+    );
+});
+
 loginForm.addEventListener('submit', async (e) => {
     e.preventDefault();
     loginMessage.hidden = true;

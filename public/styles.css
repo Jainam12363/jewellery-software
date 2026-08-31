@@ -2092,3 +2092,71 @@ body {
     }
 
 }
+
+.password-wrapper {
+  position: relative;
+  width: 100%;
+}
+
+.password-wrapper input {
+  width: 100%;
+  padding-right: 48px;
+}
+
+.password-toggle {
+  position: absolute;
+  top: 50%;
+  right: 12px;
+  transform: translateY(-50%);
+
+  display: flex;
+  align-items: center;
+  justify-content: center;
+
+  width: 32px;
+  height: 32px;
+  padding: 5px;
+
+  border: none;
+  background: transparent;
+  color: #666;
+
+  cursor: pointer;
+}
+
+.password-toggle:hover {
+  color: #222;
+  background: transparent;
+}
+
+.password-toggle:focus-visible {
+  outline: 2px solid currentColor;
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+.password-toggle svg {
+  width: 20px;
+  height: 20px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.password-toggle .eye-off-icon {
+  display: block;
+}
+
+.password-toggle .eye-icon {
+  display: none;
+}
+
+.password-toggle.showing .eye-icon {
+  display: block;
+}
+
+.password-toggle.showing .eye-off-icon {
+  display: none;
+}
