@@ -593,8 +593,14 @@ const app = express();
 
 app.use(
   helmet({
+    hidePoweredBy: true,
+    noSniff: true,
+    referrerPolicy: { policy: 'same-origin' },
+    crossOriginResourcePolicy: { policy: 'same-origin' },
+    crossOriginOpenerPolicy: { policy: 'same-origin' },
+    frameguard: { action: 'deny' },
     strictTransportSecurity: IS_PRODUCTION
-      ? undefined
+      ? { maxAge: 31536000, includeSubDomains: true }
       : false,
 
     contentSecurityPolicy: {
@@ -645,44 +651,50 @@ app.post(
   '/api/auth/register',
   [
     body('username')
+      .isString()
       .trim()
       .isLength({ min: 3, max: 30 })
       .matches(/^[a-zA-Z0-9_]+$/)
       .withMessage('Username must be 3–30 characters (letters, numbers, underscore only).'),
-    body('email').trim().isEmail().normalizeEmail().withMessage('Enter a valid email address.'),
+    body('email').isString().trim().isEmail().normalizeEmail().withMessage('Enter a valid email address.'),
     body('password')
+      .isString()
       .isLength({ min: 8, max: 128 })
       .matches(PASSWORD_REGEX)
       .withMessage(
         'Password must be 8–128 characters with uppercase, lowercase, number, and special character.'
       ),
-    body('confirmPassword').custom((value, { req }) => {
+    body('confirmPassword').isString().custom((value, { req }) => {
       if (value !== req.body.password) throw new Error('Passwords do not match.');
       return true;
     }),
   ],
-  async (req, res) => {
-    if (validationErrors(req, res)) return;
+  async (req, res, next) => {
+    try {
+      if (validationErrors(req, res)) return;
 
-    const { username, email, password } = req.body;
+      const { username, email, password } = req.body;
 
-    const existing = db
-      .prepare('SELECT id FROM users WHERE username = ? OR email = ? COLLATE NOCASE')
-      .get(username, email);
-    if (existing) {
-      return res.status(409).json({ error: 'Username or email is already registered.' });
+      const existing = db
+        .prepare('SELECT id FROM users WHERE username = ? OR email = ? COLLATE NOCASE')
+        .get(username, email);
+      if (existing) {
+        return res.status(409).json({ error: 'Username or email is already registered.' });
+      }
+
+      const passwordHash = await bcrypt.hash(password, BCRYPT_ROUNDS);
+      const id = crypto.randomUUID();
+      const createdAt = new Date().toISOString();
+
+      db.prepare(
+        `INSERT INTO users (id, username, email, password_hash, created_at)
+         VALUES (?, ?, ?, ?, ?)`
+      ).run(id, username, email, passwordHash, createdAt);
+
+      res.status(201).json({ message: 'Account created successfully. You can now log in.' });
+    } catch (err) {
+      next(err);
     }
-
-    const passwordHash = await bcrypt.hash(password, BCRYPT_ROUNDS);
-    const id = crypto.randomUUID();
-    const createdAt = new Date().toISOString();
-
-    db.prepare(
-      `INSERT INTO users (id, username, email, password_hash, created_at)
-       VALUES (?, ?, ?, ?, ?)`
-    ).run(id, username, email, passwordHash, createdAt);
-
-    res.status(201).json({ message: 'Account created successfully. You can now log in.' });
   }
 );
 
@@ -690,76 +702,82 @@ app.post(
   '/api/auth/login',
   [
     body('identifier')
+      .isString()
       .trim()
       .isLength({ min: 1, max: 254 })
       .withMessage('Username or email is invalid.'),
     body('password')
+      .isString()
       .isLength({ min: 1, max: 128 })
       .withMessage('Invalid password.'),
   ],
-  async (req, res) => {
-    if (validationErrors(req, res)) return;
+  async (req, res, next) => {
+    try {
+      if (validationErrors(req, res)) return;
 
-    const identifier = req.body.identifier.trim();
-    const password = req.body.password;
+      const identifier = req.body.identifier.trim();
+      const password = req.body.password;
 
-    const user = db.prepare(`
-      SELECT *
-      FROM users
-      WHERE username = ? COLLATE NOCASE
-        OR email = ? COLLATE NOCASE
-    `).get(identifier, identifier);
+      const user = db.prepare(`
+        SELECT *
+        FROM users
+        WHERE username = ? COLLATE NOCASE
+          OR email = ? COLLATE NOCASE
+      `).get(identifier, identifier);
 
 
-    if (!user) {
-      await bcrypt.hash(password, BCRYPT_ROUNDS);
-      console.warn('SECURITY: Failed login attempt - account not found.');
-      return res.status(401).json({ error: 'Invalid username/email or password.' });
-    }
-
-    if (user.locked_until && new Date(user.locked_until) > new Date()) {
-      const minutesLeft = Math.ceil((new Date(user.locked_until) - new Date()) / 60000);
-      return res.status(429).json({
-        error: `Account temporarily locked. Try again in about ${minutesLeft} minute(s).`,
-      });
-    }
-
-    const passwordValid = await bcrypt.compare(password, user.password_hash);
-
-    if (!passwordValid) {
-      const attempts = user.failed_login_attempts + 1;
-      console.warn(`SECURITY: Failed login attempt for user ID ${user.id}.`);
-      let lockedUntil = null;
-      if (attempts >= LOCKOUT_ATTEMPTS) {
-        lockedUntil = new Date(Date.now() + LOCKOUT_DURATION_MS).toISOString();
+      if (!user) {
+        await bcrypt.hash(password, BCRYPT_ROUNDS);
+        console.warn('SECURITY: Failed login attempt - account not found.');
+        return res.status(401).json({ error: 'Invalid username/email or password.' });
       }
-      db.prepare(
-        `UPDATE users SET failed_login_attempts = ?, locked_until = ? WHERE id = ?`
-      ).run(attempts, lockedUntil, user.id);
 
-      if (lockedUntil) {
+      if (user.locked_until && new Date(user.locked_until) > new Date()) {
+        const minutesLeft = Math.ceil((new Date(user.locked_until) - new Date()) / 60000);
         return res.status(429).json({
-          error: 'Too many failed attempts. Account locked for 15 minutes.',
+          error: `Account temporarily locked. Try again in about ${minutesLeft} minute(s).`,
         });
       }
-      return res.status(401).json({ error: 'Invalid username/email or password.' });
+
+      const passwordValid = await bcrypt.compare(password, user.password_hash);
+
+      if (!passwordValid) {
+        const attempts = user.failed_login_attempts + 1;
+        console.warn(`SECURITY: Failed login attempt for user ID ${user.id}.`);
+        let lockedUntil = null;
+        if (attempts >= LOCKOUT_ATTEMPTS) {
+          lockedUntil = new Date(Date.now() + LOCKOUT_DURATION_MS).toISOString();
+        }
+        db.prepare(
+          `UPDATE users SET failed_login_attempts = ?, locked_until = ? WHERE id = ?`
+        ).run(attempts, lockedUntil, user.id);
+
+        if (lockedUntil) {
+          return res.status(429).json({
+            error: 'Too many failed attempts. Account locked for 15 minutes.',
+          });
+        }
+        return res.status(401).json({ error: 'Invalid username/email or password.' });
+      }
+
+      db.prepare(
+        `UPDATE users SET failed_login_attempts = 0, locked_until = NULL WHERE id = ?`
+      ).run(user.id);
+
+      console.log(`SECURITY: Successful login for user ID ${user.id}.`);
+
+      revokeCsrfTokensForUser(user.id);
+      const token = signToken(user);
+      const csrfToken = createCsrfToken(user.id);
+      setAuthCookie(res, token);
+
+      res.json({
+        user: { username: user.username, email: user.email },
+        csrfToken,
+      });
+    } catch (err) {
+      next(err);
     }
-
-    db.prepare(
-      `UPDATE users SET failed_login_attempts = 0, locked_until = NULL WHERE id = ?`
-    ).run(user.id);
-
-    console.log(`SECURITY: Successful login for user ID ${user.id}.`);
-
-    revokeCsrfTokensForUser(user.id);
-    const token = signToken(user);
-    const csrfToken = createCsrfToken(user.id);
-    setAuthCookie(res, token);
-
-    res.json({
-      user: { username: user.username, email: user.email },
-      csrfToken,
-    });
   }
 );
 
@@ -790,10 +808,10 @@ app.get(
   '/api/reports/existing-customers',
   authenticate,
   [
-    query('party').trim().notEmpty(),
-    query('date').isISO8601({ strict: false })
+    query('party').isString().trim().notEmpty().isLength({ max: 30 }).withMessage('Invalid party.'),
+    query('date').isString().isISO8601({ strict: false }).withMessage('Invalid report date.')
   ],
-  (req, res) => {
+  (req, res, next) => {
 
     if (validationErrors(req, res)) return;
 
@@ -1088,6 +1106,7 @@ app.get(
   [
     query('party')
       .optional()
+      .isString()
       .trim()
       .isLength({ max: 30 })
       .withMessage('Invalid party.'),
@@ -1099,59 +1118,64 @@ app.get(
 
     query('name')
       .optional()
+      .isString()
       .trim()
       .isLength({ max: 100 })
       .withMessage('Invalid customer name.'),
   ],
-  (req, res) => {
-    if (validationErrors(req, res)) return;
+  (req, res, next) => {
+    try {
+      if (validationErrors(req, res)) return;
 
-    const { party, packetNo, name } = req.query;
-    let rows = db.prepare(
-      'SELECT * FROM records WHERE user_id = ? ORDER BY created_at DESC'
-    ).all(req.user.id);
+      const { party, packetNo, name } = req.query;
+      let rows = db.prepare(
+        'SELECT * FROM records WHERE user_id = ? ORDER BY created_at DESC'
+      ).all(req.user.id);
 
-    if (party) rows = rows.filter((r) => r.party === party);
-    if (packetNo) rows = rows.filter((r) => r.packet_no === Number(packetNo));
-    if (name) {
-      const q = name.toLowerCase();
-      rows = rows.filter((r) => r.customer_name.toLowerCase().includes(q));
+      if (party) rows = rows.filter((r) => r.party === party);
+      if (packetNo) rows = rows.filter((r) => r.packet_no === Number(packetNo));
+      if (name) {
+        const q = name.toLowerCase();
+        rows = rows.filter((r) => r.customer_name.toLowerCase().includes(q));
+      }
+
+      const records = rows.map(row => {
+
+          const record = rowToRecord(row);
+
+          record.interestPayments = db.prepare(`
+              SELECT
+                  payment_date,
+                  interest_paid_till,
+                  interest_amount
+              FROM interest_payments
+              WHERE record_id = ? AND user_id = ?
+              ORDER BY payment_date
+          `).all(row.id, req.user.id).map(item => ({
+
+              date: item.payment_date,
+
+              interestPaidTill: item.interest_paid_till,
+
+              amount: item.interest_amount
+
+          }));
+
+          record.hasTransactions =
+              record.topUps.length > 0 ||
+              record.paidUps.length > 0 ||
+              record.interestPayments.length > 0;
+
+          return record;
+
+      });
+
+      res.json({
+          records
+      });
+    } catch (err) {
+      next(err);
     }
-
-    const records = rows.map(row => {
-
-        const record = rowToRecord(row);
-
-        record.interestPayments = db.prepare(`
-            SELECT
-                payment_date,
-                interest_paid_till,
-                interest_amount
-            FROM interest_payments
-            WHERE record_id = ?
-            ORDER BY payment_date
-        `).all(row.id).map(item => ({
-
-            date: item.payment_date,
-
-            interestPaidTill: item.interest_paid_till,
-
-            amount: item.interest_amount
-
-        }));
-
-        record.hasTransactions =
-            record.topUps.length > 0 ||
-            record.paidUps.length > 0 ||
-            record.interestPayments.length > 0;
-
-        return record;
-
-    });
-
-    res.json({
-        records
-    });
   }
 );
 
@@ -1161,6 +1185,7 @@ app.get(
   authenticate,
   [
     query('party')
+      .isString()
       .trim()
       .isLength({ min: 1, max: 30 })
       .withMessage('Invalid party.'),
@@ -1172,11 +1197,12 @@ app.get(
 
     query('name')
       .optional()
+      .isString()
       .trim()
       .isLength({ max: 100 })
       .withMessage('Invalid customer name.'),
   ],
-  (req, res) => {
+  (req, res, next) => {
 
     try {
 
@@ -1292,13 +1318,7 @@ app.get(
     }
 
     catch (err) {
-
-        console.error(err);
-
-        res.status(500).json({
-            error: 'Internal server error.'
-        });
-
+        next(err);
     }
 
 });
@@ -1309,20 +1329,23 @@ app.post(
   requireCsrf,
   [
     body('party')
+      .isString()
       .trim()
       .isLength({ min: 1, max: 30 })
       .withMessage('Invalid party.'),
-    body('packetNo').isInt({ min: 1 }),
-    body('customerName').trim().isLength({ min: 1, max: 100 }),
+    body('packetNo').isInt({ min: 1, max: 1000000000 }).withMessage('Invalid packet number.'),
+    body('customerName').isString().trim().isLength({ min: 1, max: 100 }).withMessage('Invalid customer name.'),
     body('phoneNumber')
+      .isString()
       .trim()
       .matches(/^[0-9]{10}$/)
       .withMessage('Phone number must be exactly 10 digits.'),
 
     body('item')
+      .isString()
       .isIn(['Gold', 'Silver', 'Both'])
       .withMessage('Invalid item.'),
-    body('itemName').trim().isLength({ min: 1, max: 100 }),
+    body('itemName').isString().trim().isLength({ min: 1, max: 100 }).withMessage('Invalid item name.'),
 
     body('amount')
       .isFloat({ min: 0, max: 1000000000 })
@@ -1340,7 +1363,7 @@ app.post(
       .custom(Number.isFinite)
       .withMessage('Weight must be a finite number.'),
 
-    body('entryDate').isISO8601({ strict: false }),
+    body('entryDate').isString().isISO8601({ strict: false }).withMessage('Invalid entry date.'),
 
     body('rateOfInterest')
       .isFloat({ min: 0, max: 100 })
@@ -1348,8 +1371,9 @@ app.post(
       .custom(Number.isFinite)
       .withMessage('Interest rate must be a finite number.'),
   ],
-  (req, res) => {
-    if (validationErrors(req, res)) return;
+  (req, res, next) => {
+    try {
+      if (validationErrors(req, res)) return;
 
     const {
       party,
@@ -1420,8 +1444,11 @@ app.post(
       createdAt
     );
 
-    const row = db.prepare('SELECT * FROM records WHERE id = ?').get(id);
+    const row = db.prepare('SELECT * FROM records WHERE id = ? AND user_id = ?').get(id, req.user.id);
     res.status(201).json({ record: rowToRecord(row) });
+    } catch (err) {
+      next(err);
+    }
   }
 );
 
@@ -1431,80 +1458,69 @@ app.post(
   requireCsrf,
   [
     body('party')
+      .isString()
       .trim()
       .isLength({ min: 1, max: 30 })
       .withMessage('Invalid party.'),
-    body('packetNo').isInt({ min: 1 }),
+    body('packetNo').isInt({ min: 1, max: 1000000000 }).withMessage('Invalid packet number.'),
     body('amount')
       .isFloat({ min: 0.01, max: 1000000000 })
       .withMessage('Invalid top-up amount.')
       .custom(Number.isFinite)
       .withMessage('Top-up amount must be a finite number.'),
-    body('date').isISO8601({ strict: false }),
+    body('date').isString().isISO8601({ strict: false }).withMessage('Invalid top-up date.'),
   ],
-  (req, res) => {
-    if (validationErrors(req, res)) return;
+  (req, res, next) => {
+    try {
+      if (validationErrors(req, res)) return;
 
-    const { party, packetNo, amount, date } = req.body;
-    const row = db
-      .prepare(
-        'SELECT * FROM records WHERE user_id = ? AND party = ? AND packet_no = ?'
-      )
-      .get(req.user.id, party, packetNo);
+      const { party, packetNo, amount, date } = req.body;
 
+      const executeTopUp = db.transaction(() => {
+        const row = db
+          .prepare(
+            'SELECT * FROM records WHERE user_id = ? AND party = ? AND packet_no = ?'
+          )
+          .get(req.user.id, party, packetNo);
 
+        if (!row) {
+            return { status: 404, payload: { error: `No record found for Packet ${packetNo} under ${party}.` } };
+        }
 
-    if (!row) {
+        if (row.status === 'RELEASED') {
+            return { status: 400, payload: { error: 'Customer has already been released. Top-Up is not allowed.' } };
+        }
 
-        return res.status(404).json({
+        if (new Date(date) <= new Date(row.entry_date)) {
+          return { status: 400, payload: { error: 'Top-up date must be after the entry date.' } };
+        }
+        if (
+            row.release_date &&
+            new Date(date) >= new Date(row.release_date)
+        ) {
+            return { status: 400, payload: { error: 'Top-up date must be before the release date.' } };
+        }
 
-            error: `No record found for Packet ${packetNo} under ${party}.`
-
+        const topUps = JSON.parse(row.top_ups || '[]');
+        topUps.push({
+            date,
+            amount: Number(amount),
+            createdAt: new Date().toISOString()
         });
+        topUps.sort(
+            (a, b) => new Date(a.date) - new Date(b.date)
+        );
+        db.prepare('UPDATE records SET top_ups = ? WHERE id = ? AND user_id = ?').run(JSON.stringify(topUps), row.id, req.user.id);
 
+        const updated = db.prepare('SELECT * FROM records WHERE id = ? AND user_id = ?').get(row.id, req.user.id);
+        return { status: 200, payload: { record: rowToRecord(updated) } };
+      });
+
+      const result = executeTopUp();
+      res.status(result.status).json(result.payload);
+    } catch (err) {
+      next(err);
     }
-
-    if (row.status === 'RELEASED') {
-
-        return res.status(400).json({
-
-            error: 'Customer has already been released. Top-Up is not allowed.'
-
-        });
-
-    }
-
-    if (new Date(date) <= new Date(row.entry_date)) {
-      return res.status(400).json({ error: 'Top-up date must be after the entry date.' });
-    }
-    if (
-        row.release_date &&
-        new Date(date) >= new Date(row.release_date)
-    ) {
-        return res.status(400).json({
-            error: 'Top-up date must be before the release date.'
-        });
-    }
-
-    const topUps = JSON.parse(row.top_ups || '[]');
-    topUps.push({
-        date,
-        amount: Number(amount),
-        createdAt: new Date().toISOString()
-    });
-    topUps.sort(
-
-        (a, b) =>
-
-            new Date(a.date) -
-
-            new Date(b.date)
-
-    );
-    db.prepare('UPDATE records SET top_ups = ? WHERE id = ?').run(JSON.stringify(topUps), row.id);
-
-    const updated = db.prepare('SELECT * FROM records WHERE id = ?').get(row.id);
-    res.json({ record: rowToRecord(updated) });
   }
 );
 
@@ -1518,86 +1534,76 @@ app.post(
   requireCsrf,
   [
     body('party')
+      .isString()
       .trim()
       .isLength({ min: 1, max: 30 })
       .withMessage('Invalid party.'),
-    body('packetNo').isInt({ min: 1 }),
+    body('packetNo').isInt({ min: 1, max: 1000000000 }).withMessage('Invalid packet number.'),
     body('amount')
       .isFloat({ min: 0.01, max: 1000000000 })
       .withMessage('Invalid paid-up amount.')
       .custom(Number.isFinite)
       .withMessage('Paid-up amount must be a finite number.'),
-    body('date').isISO8601({ strict: false }),
+    body('date').isString().isISO8601({ strict: false }).withMessage('Invalid paid-up date.'),
   ],
-  (req, res) => {
-    if (validationErrors(req, res)) return;
+  (req, res, next) => {
+    try {
+      if (validationErrors(req, res)) return;
 
-    const { party, packetNo, amount, date } = req.body;
-    const row = db
-      .prepare(
-        'SELECT * FROM records WHERE user_id = ? AND party = ? AND packet_no = ?'
-      )
-      .get(req.user.id, party, packetNo);
+      const { party, packetNo, amount, date } = req.body;
 
+      const executePaidUp = db.transaction(() => {
+        const row = db
+          .prepare(
+            'SELECT * FROM records WHERE user_id = ? AND party = ? AND packet_no = ?'
+          )
+          .get(req.user.id, party, packetNo);
 
+        if (!row) {
+            return { status: 404, payload: { error: `No record found for Packet ${packetNo} under ${party}.` } };
+        }
 
-    if (!row) {
+        if (row.status === 'RELEASED') {
+            return { status: 400, payload: { error: 'Customer has already been released. Paid-Up is not allowed.' } };
+        }
 
-        return res.status(404).json({
+        if (new Date(date) <= new Date(row.entry_date)) {
+          return { status: 400, payload: { error: 'Paid-Up date must be after the entry date.' } };
+        }
+        if (
+            row.release_date &&
+            new Date(date) >= new Date(row.release_date)
+        ) {
+            return { status: 400, payload: { error: 'Paid-Up date must be before the release date.' } };
+        }
 
-            error: `No record found for Packet ${packetNo} under ${party}.`
-
+        const paidUps = JSON.parse(row.paid_ups || '[]');
+        paidUps.push({
+            date,
+            amount: Number(amount),
+            createdAt: new Date().toISOString()
         });
+        paidUps.sort(
+            (a, b) => new Date(a.date) - new Date(b.date)
+        );
 
+        db.prepare(
+            'UPDATE records SET paid_ups = ? WHERE id = ? AND user_id = ?'
+        ).run(
+            JSON.stringify(paidUps),
+            row.id,
+            req.user.id
+        );
+
+        const updated = db.prepare('SELECT * FROM records WHERE id = ? AND user_id = ?').get(row.id, req.user.id);
+        return { status: 200, payload: { record: rowToRecord(updated) } };
+      });
+
+      const result = executePaidUp();
+      res.status(result.status).json(result.payload);
+    } catch (err) {
+      next(err);
     }
-
-    if (row.status === 'RELEASED') {
-
-        return res.status(400).json({
-
-            error: 'Customer has already been released. Paid-Up is not allowed.'
-
-        });
-
-    }
-
-    if (new Date(date) <= new Date(row.entry_date)) {
-      return res.status(400).json({ error: 'Paid-Up date must be after the entry date.' });
-    }
-    if (
-        row.release_date &&
-        new Date(date) >= new Date(row.release_date)
-    ) {
-        return res.status(400).json({
-            error: 'Paid-Up date must be before the release date.'
-        });
-    }
-
-    const paidUps = JSON.parse(row.paid_ups || '[]');
-    paidUps.push({
-        date,
-        amount: Number(amount),
-        createdAt: new Date().toISOString()
-    });
-    paidUps.sort(
-
-        (a, b) =>
-
-            new Date(a.date) -
-
-            new Date(b.date)
-
-    );
-
-    db.prepare(
-        'UPDATE records SET paid_ups = ? WHERE id = ?'
-    ).run(
-        JSON.stringify(paidUps),
-        row.id
-    );
-
-    const updated = db.prepare('SELECT * FROM records WHERE id = ?').get(row.id);
-    res.json({ record: rowToRecord(updated) });
   }
 );
 
@@ -1608,23 +1614,26 @@ app.put(
   requireCsrf,
   [
     body('party')
+      .isString()
       .trim()
       .isLength({ min: 1, max: 30 })
       .withMessage('Invalid party.'),
-    body('packetNo').isInt({ min: 1 }),
+    body('packetNo').isInt({ min: 1, max: 1000000000 }).withMessage('Invalid packet number.'),
 
-    body('customerName').trim().isLength({ min: 1, max: 100 }),
+    body('customerName').isString().trim().isLength({ min: 1, max: 100 }).withMessage('Invalid customer name.'),
 
     body('phoneNumber')
+      .isString()
       .trim()
       .matches(/^[0-9]{10}$/)
       .withMessage('Phone number must be exactly 10 digits.'),
 
     body('item')
+      .isString()
       .isIn(['Gold', 'Silver', 'Both'])
       .withMessage('Invalid item.'),
 
-    body('itemName').trim().isLength({ min: 1, max: 100 }),
+    body('itemName').isString().trim().isLength({ min: 1, max: 100 }).withMessage('Invalid item name.'),
 
     body('amount')
       .isFloat({ min: 0, max: 1000000000 })
@@ -1642,7 +1651,7 @@ app.put(
       .custom(Number.isFinite)
       .withMessage('Weight must be a finite number.'),
 
-    body('entryDate').isISO8601({ strict: false }),
+    body('entryDate').isString().isISO8601({ strict: false }).withMessage('Invalid entry date.'),
 
     body('rateOfInterest')
       .isFloat({ min: 0, max: 100 })
@@ -1651,110 +1660,115 @@ app.put(
       .withMessage('Interest rate must be a finite number.'),
   ],
 
-  (req, res) => {
+  (req, res, next) => {
+    try {
+      if (validationErrors(req, res)) return;
 
-    if (validationErrors(req, res)) return;
+      const {
+        party,
+        packetNo,
+        customerName,
+        phoneNumber,
+        item,
+        itemName,
+        amount,
+        quantity,
+        weight,
+        entryDate,
+        rateOfInterest,
+      } = req.body;
 
-    const {
-      party,
-      packetNo,
-      customerName,
-      phoneNumber,
-      item,
-      itemName,
-      amount,
-      quantity,
-      weight,
-      entryDate,
-      rateOfInterest,
-    } = req.body;
+      const executeEdit = db.transaction(() => {
+        const row = db.prepare(
+          `SELECT *
+           FROM records
+           WHERE user_id = ?
+           AND party = ?
+           AND packet_no = ?`
+        ).get(req.user.id, party, packetNo);
 
-    const row = db.prepare(
-      `SELECT *
-       FROM records
-       WHERE user_id = ?
-       AND party = ?
-       AND packet_no = ?`
-    ).get(req.user.id, party, packetNo);
+        if (!row) {
+          return { status: 404, payload: { error: 'Customer not found.' } };
+        }
 
-    if (!row) {
-      return res.status(404).json({
-        error: 'Customer not found.'
+        const hasTransactions =
+            JSON.parse(row.top_ups || "[]").length > 0 ||
+            JSON.parse(row.paid_ups || "[]").length > 0 ||
+            db.prepare(`
+                SELECT COUNT(*)
+                AS count
+                FROM interest_payments
+                WHERE record_id = ? AND user_id = ?
+            `).get(row.id, req.user.id).count > 0;
+
+        if (hasTransactions) {
+
+            db.prepare(`
+                UPDATE records
+                SET
+                    customer_name = ?,
+                    phone_number = ?,
+                    item = ?,
+                    item_name = ?,
+                    quantity = ?,
+                    weight = ?,
+                    entry_date = ?
+                WHERE id = ? AND user_id = ?
+            `).run(
+                customerName,
+                phoneNumber,
+                item,
+                itemName,
+                quantity,
+                weight,
+                entryDate,
+                row.id,
+                req.user.id
+            );
+
+        } else {
+
+            db.prepare(`
+                UPDATE records
+                SET
+                    customer_name = ?,
+                    phone_number = ?,
+                    item = ?,
+                    item_name = ?,
+                    amount = ?,
+                    quantity = ?,
+                    weight = ?,
+                    entry_date = ?,
+                    rate_of_interest = ?
+                WHERE id = ? AND user_id = ?
+            `).run(
+                customerName,
+                phoneNumber,
+                item,
+                itemName,
+                amount,
+                quantity,
+                weight,
+                entryDate,
+                rateOfInterest,
+                row.id,
+                req.user.id
+            );
+
+        }
+
+        const updated = db.prepare(
+          'SELECT * FROM records WHERE id = ? AND user_id = ?'
+        ).get(row.id, req.user.id);
+
+        return { status: 200, payload: { record: rowToRecord(updated) } };
       });
+
+      const result = executeEdit();
+      res.status(result.status).json(result.payload);
+    } catch (err) {
+      next(err);
     }
-
-    const hasTransactions =
-        JSON.parse(row.top_ups || "[]").length > 0 ||
-        JSON.parse(row.paid_ups || "[]").length > 0 ||
-        db.prepare(`
-            SELECT COUNT(*)
-            AS count
-            FROM interest_payments
-            WHERE record_id = ?
-        `).get(row.id).count > 0;
-
-    if (hasTransactions) {
-
-        db.prepare(`
-            UPDATE records
-            SET
-                customer_name = ?,
-                phone_number = ?,
-                item = ?,
-                item_name = ?,
-                quantity = ?,
-                weight = ?,
-                entry_date = ?
-            WHERE id = ?
-        `).run(
-            customerName,
-            phoneNumber,
-            item,
-            itemName,
-            quantity,
-            weight,
-            entryDate,
-            row.id
-        );
-
-    } else {
-
-        db.prepare(`
-            UPDATE records
-            SET
-                customer_name = ?,
-                phone_number = ?,
-                item = ?,
-                item_name = ?,
-                amount = ?,
-                quantity = ?,
-                weight = ?,
-                entry_date = ?,
-                rate_of_interest = ?
-            WHERE id = ?
-        `).run(
-            customerName,
-            phoneNumber,
-            item,
-            itemName,
-            amount,
-            quantity,
-            weight,
-            entryDate,
-            rateOfInterest,
-            row.id
-        );
-
-    }
-
-    const updated = db.prepare(
-      'SELECT * FROM records WHERE id = ?'
-    ).get(row.id);
-
-    res.json({
-      record: rowToRecord(updated)
-    });
-
   }
 );
 
@@ -1765,164 +1779,143 @@ app.put(
   requireCsrf,
   [
     body('party')
+      .isString()
       .trim()
       .isLength({ min: 1, max: 30 })
       .withMessage('Invalid party.'),
-    body('packetNo').isInt({ min: 1 }),
-    body('releaseDate').isISO8601({ strict: false }),
+    body('packetNo').isInt({ min: 1, max: 1000000000 }).withMessage('Invalid packet number.'),
+    body('releaseDate').isString().isISO8601({ strict: false }).withMessage('Invalid release date.'),
   ],
 
-  (req, res) => {
+  (req, res, next) => {
+    try {
+      if (validationErrors(req, res)) return;
 
-    if (validationErrors(req, res)) return;
+      const {
+        party,
+        packetNo,
+        releaseDate
+      } = req.body;
 
-    const {
-      party,
-      packetNo,
-      releaseDate
-    } = req.body;
+      const executeRelease = db.transaction(() => {
+        const row = db.prepare(
+          `SELECT *
+          FROM records
+          WHERE user_id = ?
+          AND party = ?
+          AND packet_no = ?`
+        ).get(
+          req.user.id,
+          party,
+          packetNo
+        );
 
-    const row = db.prepare(
-      `SELECT *
-      FROM records
-      WHERE user_id = ?
-      AND party = ?
-      AND packet_no = ?`
-    ).get(
-      req.user.id,
-      party,
-      packetNo
-    );
-
-    if (!row) {
-      return res.status(404).json({
-        error: 'Customer not found.'
-      });
-    }
-
-    const interestHistory = db.prepare(`
-        SELECT
-            interest_paid_till,
-            interest_amount
-        FROM interest_payments
-        WHERE record_id = ?
-        ORDER BY interest_paid_till
-    `).all(row.id);
-
-    const interestAlreadyPaid = interestHistory.reduce(
-      (sum, item) => sum + item.interest_amount,
-      0
-    );
-
-    const lastInterestPaidTill =
-      interestHistory.length > 0
-        ? interestHistory[interestHistory.length - 1].interest_paid_till
-        : null;
-
-
-    if (row.status === 'RELEASED') {
-      return res.status(400).json({
-        error: 'Customer is already released.'
-      });
-    }
-
-    if (new Date(releaseDate) <= new Date(row.entry_date)) {
-      return res.status(400).json({
-        error: 'Release Date must be after Entry Date.'
-      });
-    }
-
-
-    const topUps = JSON.parse(row.top_ups || "[]");
-
-    if (topUps.length > 0) {
-
-        const lastTopUp = topUps[topUps.length - 1];
-
-        if (new Date(releaseDate) <= new Date(lastTopUp.date)) {
-
-            return res.status(400).json({
-                error: "Release Date must be after the latest Top-Up."
-            });
-
+        if (!row) {
+          return { status: 404, payload: { error: 'Customer not found.' } };
         }
 
-    }
+        const interestHistory = db.prepare(`
+            SELECT
+                interest_paid_till,
+                interest_amount
+            FROM interest_payments
+            WHERE record_id = ? AND user_id = ?
+            ORDER BY interest_paid_till
+        `).all(row.id, req.user.id);
 
-    const paidUps = JSON.parse(row.paid_ups || "[]");
+        const interestAlreadyPaid = interestHistory.reduce(
+          (sum, item) => sum + item.interest_amount,
+          0
+        );
 
-    if (paidUps.length > 0) {
+        const lastInterestPaidTill =
+          interestHistory.length > 0
+            ? interestHistory[interestHistory.length - 1].interest_paid_till
+            : null;
 
-        const lastPaidUp = paidUps[paidUps.length - 1];
-
-        if (new Date(releaseDate) <= new Date(lastPaidUp.date)) {
-
-            return res.status(400).json({
-                error: "Release Date must be after the latest Paid-Up."
-            });
-
+        if (row.status === 'RELEASED') {
+          return { status: 400, payload: { error: 'Customer is already released.' } };
         }
 
+        if (new Date(releaseDate) <= new Date(row.entry_date)) {
+          return { status: 400, payload: { error: 'Release Date must be after Entry Date.' } };
+        }
+
+        const topUps = JSON.parse(row.top_ups || "[]");
+        if (topUps.length > 0) {
+            const lastTopUp = topUps[topUps.length - 1];
+            if (new Date(releaseDate) <= new Date(lastTopUp.date)) {
+                return { status: 400, payload: { error: "Release Date must be after the latest Top-Up." } };
+            }
+        }
+
+        const paidUps = JSON.parse(row.paid_ups || "[]");
+        if (paidUps.length > 0) {
+            const lastPaidUp = paidUps[paidUps.length - 1];
+            if (new Date(releaseDate) <= new Date(lastPaidUp.date)) {
+                return { status: 400, payload: { error: "Release Date must be after the latest Paid-Up." } };
+            }
+        }
+
+        if (
+            lastInterestPaidTill &&
+            new Date(releaseDate) < new Date(lastInterestPaidTill)
+        ) {
+            return { status: 400, payload: { error: "Release Date cannot be before the latest Interest Payment." } };
+        }
+
+        let interestStartDate;
+        if (lastInterestPaidTill) {
+            const nextDate = new Date(lastInterestPaidTill);
+            nextDate.setDate(nextDate.getDate() + 1);
+            interestStartDate = nextDate.toISOString().split('T')[0];
+        } else {
+            interestStartDate = row.entry_date;
+        }
+
+        const remainingInterest =
+          calculateInterestForPeriod(
+              rowToRecord(row),
+              interestStartDate,
+              releaseDate
+          );
+
+        const totalInterest =
+          interestAlreadyPaid +
+          remainingInterest;
+
+        db.prepare(`
+          UPDATE records
+          SET
+            release_date = ?,
+            status = 'RELEASED'
+          WHERE id = ? AND user_id = ?
+        `).run(
+          releaseDate,
+          row.id,
+          req.user.id
+        );
+
+        const updated = db.prepare(
+          'SELECT * FROM records WHERE id = ? AND user_id = ?'
+        ).get(row.id, req.user.id);
+
+        return {
+          status: 200,
+          payload: {
+            record: rowToRecord(updated),
+            totalInterest,
+            interestAlreadyPaid,
+            remainingInterest
+          }
+        };
+      });
+
+      const result = executeRelease();
+      res.status(result.status).json(result.payload);
+    } catch (err) {
+      next(err);
     }
-
-    if (
-        lastInterestPaidTill &&
-        new Date(releaseDate) < new Date(lastInterestPaidTill)
-    ) {
-        return res.status(400).json({
-            error: "Release Date cannot be before the latest Interest Payment."
-        });
-    }
-
-
-    let interestStartDate;
-
-    if (lastInterestPaidTill) {
-        const nextDate = new Date(lastInterestPaidTill);
-        nextDate.setDate(nextDate.getDate() + 1);
-        interestStartDate = nextDate.toISOString().split('T')[0];
-    } else {
-        interestStartDate = row.entry_date;
-    }
-
-    const remainingInterest =
-      calculateInterestForPeriod(
-          rowToRecord(row),
-          interestStartDate,
-          releaseDate
-      );
-
-    const totalInterest =
-      interestAlreadyPaid +
-      remainingInterest;
-
-    db.prepare(`
-      UPDATE records
-      SET
-        release_date = ?,
-        status = 'RELEASED'
-      WHERE id = ?
-    `).run(
-      releaseDate,
-      row.id
-    );
-
-    const updated = db.prepare(
-      'SELECT * FROM records WHERE id = ?'
-    ).get(row.id);
-
-    res.json({
-
-      record: rowToRecord(updated),
-
-      totalInterest,
-
-      interestAlreadyPaid,
-
-      remainingInterest
-
-    });
-
   }
 );
 
@@ -1931,71 +1924,64 @@ app.get(
   '/api/interest-payment/search',
   authenticate,
   [
-    query('party').trim().notEmpty(),
-    query('packetNo').isInt({ min: 1 })
+    query('party').isString().trim().notEmpty().isLength({ max: 30 }).withMessage('Invalid party.'),
+    query('packetNo').isInt({ min: 1, max: 1000000000 }).withMessage('Invalid packet number.')
   ],
 
-  (req, res) => {
+  (req, res, next) => {
+    try {
+      if (validationErrors(req, res)) return;
 
-    if (validationErrors(req, res)) return;
+      const { party, packetNo } = req.query;
 
-    const { party, packetNo } = req.query;
+      const record = db.prepare(`
+        SELECT *
+        FROM records
+        WHERE user_id = ?
+        AND party = ?
+        AND packet_no = ?
+      `).get(
+        req.user.id,
+        party,
+        Number(packetNo)
+      );
 
-    const record = db.prepare(`
-      SELECT *
-      FROM records
-      WHERE user_id = ?
-      AND party = ?
-      AND packet_no = ?
-    `).get(
-      req.user.id,
-      party,
-      Number(packetNo)
-    );
+      if (!record) {
+        return res.status(404).json({
+          error: 'Customer not found.'
+        });
+      }
 
-    if (!record) {
-      return res.status(404).json({
-        error: 'Customer not found.'
+      const history = db.prepare(`
+        SELECT
+          interest_start_date,
+          interest_paid_till,
+          interest_amount,
+          payment_date
+        FROM interest_payments
+        WHERE record_id = ? AND user_id = ?
+        ORDER BY interest_paid_till
+      `).all(record.id, req.user.id);
+
+      const totalInterestPaid = history.reduce(
+        (sum, item) => sum + item.interest_amount,
+        0
+      );
+
+      const lastInterestPaidTill =
+        history.length > 0
+          ? history[history.length - 1].interest_paid_till
+          : null;
+
+      res.json({
+        record: rowToRecord(record),
+        lastInterestPaidTill,
+        totalInterestPaid,
+        history
       });
+    } catch (err) {
+      next(err);
     }
-
-    const history = db.prepare(`
-      SELECT
-
-        interest_start_date,
-
-        interest_paid_till,
-
-        interest_amount,
-
-        payment_date
-      FROM interest_payments
-      WHERE record_id = ?
-      ORDER BY interest_paid_till
-    `).all(record.id);
-
-    const totalInterestPaid = history.reduce(
-      (sum, item) => sum + item.interest_amount,
-      0
-    );
-
-    const lastInterestPaidTill =
-      history.length > 0
-        ? history[history.length - 1].interest_paid_till
-        : null;
-
-    res.json({
-
-      record: rowToRecord(record),
-
-      lastInterestPaidTill,
-
-      totalInterestPaid,
-
-      history
-
-    });
-
   }
 );
 
@@ -2009,227 +1995,211 @@ app.post(
 
   [
 
-    body('recordId').trim().notEmpty(),
+    body('recordId').isString().trim().notEmpty().withMessage('Invalid record ID.'),
 
-    body('interestStartDate').isISO8601({ strict: false }),
+    body('interestStartDate').isString().isISO8601({ strict: false }).withMessage('Invalid start date.'),
 
-    body('interestPaidTill').isISO8601({ strict: false })
+    body('interestPaidTill').isString().isISO8601({ strict: false }).withMessage('Invalid paid till date.')
 
   ],
 
-  (req, res) => {
+  (req, res, next) => {
+    try {
+      if (validationErrors(req, res)) return;
 
-    if (validationErrors(req, res)) return;
+      const {
 
-    const {
+        recordId,
 
-      recordId,
+        interestStartDate,
 
-      interestStartDate,
+        interestPaidTill
 
-      interestPaidTill
+      } = req.body;
 
-    } = req.body;
+      const executeInterestPayment = db.transaction(() => {
+        const record = db.prepare(
 
-    const record = db.prepare(
+          `SELECT *
+           FROM records
+           WHERE id = ?
+           AND user_id = ?`
 
-      `SELECT *
-       FROM records
-       WHERE id = ?
-       AND user_id = ?`
+        ).get(
 
-    ).get(
+          recordId,
 
-      recordId,
+          req.user.id
 
-      req.user.id
+        );
 
-    );
+        if (!record) {
 
-    if (!record) {
+          return { status: 404, payload: { error: 'Customer not found.' } };
 
-      return res.status(404).json({
-
-        error: 'Customer not found.'
-
-      });
-
-    }
+        }
 
 
-    if (record.status === 'RELEASED') {
+        if (record.status === 'RELEASED') {
 
-      return res.status(400).json({
+          return { status: 400, payload: { error: 'Interest payment cannot be added. Customer has already been released.' } };
 
-        error: 'Interest payment cannot be added. Customer has already been released.'
-
-      });
-
-    }
+        }
 
 
-    const lastPayment = db.prepare(`
-        SELECT
+        const lastPayment = db.prepare(`
+            SELECT
+                interest_start_date,
+                interest_paid_till
+            FROM interest_payments
+            WHERE record_id = ? AND user_id = ?
+            ORDER BY interest_paid_till DESC
+            LIMIT 1
+        `).get(recordId, req.user.id);
+
+
+        const numberOfDays =
+
+          Math.floor(
+
+            (
+
+              new Date(interestPaidTill) -
+
+              new Date(interestStartDate)
+
+            ) / (1000 * 60 * 60 * 24)
+
+          ) + 1;
+
+        let expectedStartDate;
+
+        if (lastPayment) {
+
+            const nextDate = new Date(lastPayment.interest_paid_till);
+
+            nextDate.setDate(nextDate.getDate() + 1);
+
+            expectedStartDate =
+                nextDate.toISOString().split('T')[0];
+
+        }
+        else {
+
+            expectedStartDate =
+                record.entry_date;
+
+        }
+
+        if (interestStartDate !== expectedStartDate) {
+
+            return { status: 400, payload: { error: `Interest Start Date must be ${expectedStartDate}.` } };
+
+        }
+
+        if (new Date(interestPaidTill) <= new Date(interestStartDate)) {
+
+          return { status: 400, payload: { error: 'Interest Paid Till date must be after Interest Start Date.' } };
+
+        }
+
+
+        const duplicate = db.prepare(`
+            SELECT id
+            FROM interest_payments
+            WHERE record_id = ?
+            AND interest_paid_till = ?
+            AND user_id = ?
+        `).get(
+          recordId,
+          interestPaidTill,
+          req.user.id
+        );
+
+        if (duplicate) {
+
+          return { status: 409, payload: { error: 'Interest for this period has already been recorded.' } };
+
+        }
+
+        const calculatedInterest =
+          calculateInterestForPeriod(
+              rowToRecord(record),
+              interestStartDate,
+              interestPaidTill
+          );
+
+        const id = crypto.randomUUID();
+
+        const today = new Date().toISOString().split('T')[0];
+
+        const createdAt = new Date().toISOString();
+
+        db.prepare(
+
+          `INSERT INTO interest_payments(
+
+            id,
+
+            user_id,
+
+            record_id,
+
             interest_start_date,
-            interest_paid_till
-        FROM interest_payments
-        WHERE record_id = ?
-        ORDER BY interest_paid_till DESC
-        LIMIT 1
-    `).get(recordId);
 
+            interest_paid_till,
 
-    const numberOfDays =
+            interest_amount,
 
-      Math.floor(
+            payment_date,
 
-        (
+            created_at
 
-          new Date(interestPaidTill) -
+          )
 
-          new Date(interestStartDate)
+          VALUES(?,?,?,?,?,?,?,?)`
 
-        ) / (1000 * 60 * 60 * 24)
+        ).run(
 
-      ) + 1;
+          id,
 
-    let expectedStartDate;
+          req.user.id,
 
-    if (lastPayment) {
+          recordId,
 
-        const nextDate = new Date(lastPayment.interest_paid_till);
-
-        nextDate.setDate(nextDate.getDate() + 1);
-
-        expectedStartDate =
-            nextDate.toISOString().split('T')[0];
-
-    }
-    else {
-
-        expectedStartDate =
-            record.entry_date;
-
-    }
-
-    if (interestStartDate !== expectedStartDate) {
-
-        return res.status(400).json({
-
-            error:
-                `Interest Start Date must be ${expectedStartDate}.`
-
-        });
-
-    }
-
-    if (new Date(interestPaidTill) <= new Date(interestStartDate)) {
-
-      return res.status(400).json({
-
-        error:
-          'Interest Paid Till date must be after Interest Start Date.'
-
-      });
-
-    }
-
-
-    const duplicate = db.prepare(`
-        SELECT id
-        FROM interest_payments
-        WHERE record_id = ?
-        AND interest_paid_till = ?
-    `).get(
-      recordId,
-      interestPaidTill
-    );
-
-    if (duplicate) {
-
-      return res.status(409).json({
-
-        error: 'Interest for this period has already been recorded.'
-
-      });
-
-    }
-
-
-
-    const calculatedInterest =
-      calculateInterestForPeriod(
-          rowToRecord(record),
           interestStartDate,
-          interestPaidTill
-      );
 
+          interestPaidTill,
 
+          calculatedInterest,
 
-    const id = crypto.randomUUID();
+          today,
 
-    const today = new Date().toISOString().split('T')[0];
+          createdAt
 
-    const createdAt = new Date().toISOString();
+        );
 
-    db.prepare(
+        return {
+          status: 200,
+          payload: {
+            message: 'Interest payment saved successfully.',
 
-      `INSERT INTO interest_payments(
+            interestAmount: calculatedInterest,
 
-        id,
+            numberOfDays,
 
-        user_id,
+            interestStartDate,
 
-        record_id,
+            interestPaidTill
+          }
+        };
+      });
 
-        interest_start_date,
-
-        interest_paid_till,
-
-        interest_amount,
-
-        payment_date,
-
-        created_at
-
-      )
-
-      VALUES(?,?,?,?,?,?,?,?)`
-
-    ).run(
-
-      id,
-
-      req.user.id,
-
-      recordId,
-
-      interestStartDate,
-
-      interestPaidTill,
-
-      calculatedInterest,
-
-      today,
-
-      createdAt
-
-    );
-
-    res.json({
-
-      message: 'Interest payment saved successfully.',
-
-      interestAmount: calculatedInterest,
-
-      numberOfDays,
-
-      interestStartDate,
-
-      interestPaidTill
-
-    });
-
+      const result = executeInterestPayment();
+      res.status(result.status).json(result.payload);
+    } catch (err) {
+      next(err);
+    }
   }
 
 );
@@ -2244,155 +2214,161 @@ app.post(
   [
 
     body('party')
+      .isString()
       .trim()
       .isLength({ min: 1, max: 30 })
       .withMessage('Invalid party.'),
 
-    body('packetNo').isInt({ min: 1 }),
+    body('packetNo').isInt({ min: 1, max: 1000000000 }).withMessage('Invalid packet number.'),
 
-    body('releaseDate').isISO8601({ strict: false })
+    body('releaseDate').isString().isISO8601({ strict: false }).withMessage('Invalid release date.')
 
   ],
 
-  (req, res) => {
+  (req, res, next) => {
+    try {
 
-    if (validationErrors(req, res)) return;
+      if (validationErrors(req, res)) return;
 
-    const {
+      const {
 
-      party,
+        party,
 
-      packetNo,
+        packetNo,
 
-      releaseDate
+        releaseDate
 
-    } = req.body;
+      } = req.body;
 
-    const row = db.prepare(
+      const row = db.prepare(
 
-      `SELECT *
-           FROM records
-           WHERE user_id = ?
-           AND party = ?
-           AND packet_no = ?`
+        `SELECT *
+             FROM records
+             WHERE user_id = ?
+             AND party = ?
+             AND packet_no = ?`
 
-    ).get(
+      ).get(
 
-      req.user.id,
+        req.user.id,
 
-      party,
+        party,
 
-      packetNo
+        packetNo
 
-    );
+      );
 
-    if (!row) {
+      if (!row) {
 
-      return res.status(404).json({
+        return res.status(404).json({
 
-        error: 'Customer not found.'
+          error: 'Customer not found.'
+
+        });
+
+      }
+
+      const topUps = JSON.parse(row.top_ups || "[]");
+
+      if (topUps.length > 0) {
+
+          const lastTopUp = topUps[topUps.length - 1];
+
+          if (new Date(releaseDate) <= new Date(lastTopUp.date)) {
+
+              return res.status(400).json({
+                  error: "Release Date must be after the latest Top-Up."
+              });
+
+          }
+
+      }
+
+      const paidUps = JSON.parse(row.paid_ups || "[]");
+
+      if (paidUps.length > 0) {
+
+          const lastPaidUp = paidUps[paidUps.length - 1];
+
+          if (new Date(releaseDate) <= new Date(lastPaidUp.date)) {
+
+              return res.status(400).json({
+                  error: "Release Date must be after the latest Paid-Up."
+              });
+
+          }
+
+      }
+
+
+      const interestHistory = db.prepare(
+
+        `SELECT
+                interest_paid_till,
+                interest_amount
+             FROM interest_payments
+             WHERE record_id = ? AND user_id = ?
+             ORDER BY interest_paid_till`
+
+      ).all(row.id, req.user.id);
+
+      const interestAlreadyPaid = interestHistory.reduce(
+
+        (sum, item) => sum + item.interest_amount,
+
+        0
+
+      );
+
+      const lastInterestPaidTill =
+        interestHistory.length > 0
+            ? interestHistory[interestHistory.length - 1].interest_paid_till
+            : null;
+
+      if (
+          lastInterestPaidTill &&
+          new Date(releaseDate) < new Date(lastInterestPaidTill)
+      ) {
+          return res.status(400).json({
+              error: "Release Date cannot be before the latest Interest Payment."
+          });
+      }
+
+      let interestStartDate;
+
+      if (lastInterestPaidTill) {
+          const nextDate = new Date(lastInterestPaidTill);
+          nextDate.setDate(nextDate.getDate() + 1);
+          interestStartDate = nextDate.toISOString().split('T')[0];
+      } else {
+          interestStartDate = row.entry_date;
+      }
+
+
+      const remainingInterest =
+        calculateInterestForPeriod(
+            rowToRecord(row),
+            interestStartDate,
+            releaseDate
+        );
+
+      res.json({
+
+        totalInterest:
+
+          interestAlreadyPaid +
+
+          remainingInterest,
+
+        interestAlreadyPaid,
+
+        remainingInterest
 
       });
 
+    } catch (err) {
+      next(err);
     }
-
-    const topUps = JSON.parse(row.top_ups || "[]");
-
-    if (topUps.length > 0) {
-
-        const lastTopUp = topUps[topUps.length - 1];
-
-        if (new Date(releaseDate) <= new Date(lastTopUp.date)) {
-
-            return res.status(400).json({
-                error: "Release Date must be after the latest Top-Up."
-            });
-
-        }
-
-    }
-
-    const paidUps = JSON.parse(row.paid_ups || "[]");
-
-    if (paidUps.length > 0) {
-
-        const lastPaidUp = paidUps[paidUps.length - 1];
-
-        if (new Date(releaseDate) <= new Date(lastPaidUp.date)) {
-
-            return res.status(400).json({
-                error: "Release Date must be after the latest Paid-Up."
-            });
-
-        }
-
-    }
-
-
-    const interestHistory = db.prepare(
-
-      `SELECT
-              interest_paid_till,
-              interest_amount
-           FROM interest_payments
-           WHERE record_id = ?
-           ORDER BY interest_paid_till`
-
-    ).all(row.id);
-
-    const interestAlreadyPaid = interestHistory.reduce(
-
-      (sum, item) => sum + item.interest_amount,
-
-      0
-
-    );
-
-    const lastInterestPaidTill =
-      interestHistory.length > 0
-          ? interestHistory[interestHistory.length - 1].interest_paid_till
-          : null;
-
-    if (
-        lastInterestPaidTill &&
-        new Date(releaseDate) < new Date(lastInterestPaidTill)
-    ) {
-        return res.status(400).json({
-            error: "Release Date cannot be before the latest Interest Payment."
-        });
-    }
-
-    let interestStartDate;
-
-    if (lastInterestPaidTill) {
-        const nextDate = new Date(lastInterestPaidTill);
-        nextDate.setDate(nextDate.getDate() + 1);
-        interestStartDate = nextDate.toISOString().split('T')[0];
-    } else {
-        interestStartDate = row.entry_date;
-    }
-
-
-    const remainingInterest =
-      calculateInterestForPeriod(
-          rowToRecord(row),
-          interestStartDate,
-          releaseDate
-      );
-
-    res.json({
-
-      totalInterest:
-
-        interestAlreadyPaid +
-
-        remainingInterest,
-
-      interestAlreadyPaid,
-
-      remainingInterest
-
-    });
 
   }
 
@@ -2407,61 +2383,75 @@ app.delete(
     requireCsrf,
 
     [
-        body("party").trim().notEmpty(),
+        body("party").isString().trim().notEmpty().isLength({ max: 30 }).withMessage("Invalid party."),
 
-        body("packetNo").isInt({ min: 1 })
+        body("packetNo").isInt({ min: 1, max: 1000000000 }).withMessage("Invalid packet number.")
     ],
 
-    (req, res) => {
+    (req, res, next) => {
 
-        if (validationErrors(req, res))
-            return;
+        try {
+            if (validationErrors(req, res))
+                return;
 
-        const { party, packetNo } = req.body;
+            const { party, packetNo } = req.body;
 
-        const row = db.prepare(`
-            SELECT id
-            FROM records
-            WHERE user_id = ?
-              AND party = ?
-              AND packet_no = ?
-        `).get(
-            req.user.id,
-            party,
-            packetNo
-        );
+            const row = db.prepare(`
+                SELECT id
+                FROM records
+                WHERE user_id = ?
+                  AND party = ?
+                  AND packet_no = ?
+            `).get(
+                req.user.id,
+                party,
+                packetNo
+            );
 
-        if (!row) {
+            if (!row) {
 
-            return res.status(404).json({
-                error: "Customer not found."
+                return res.status(404).json({
+                    error: "Customer not found."
+                });
+
+            }
+
+            const deleteCustomer = db.transaction((recordId, userId) => {
+
+                db.prepare(`
+                    DELETE FROM interest_payments
+                    WHERE record_id = ? AND user_id = ?
+                `).run(recordId, userId);
+
+                db.prepare(`
+                    DELETE FROM records
+                    WHERE id = ? AND user_id = ?
+                `).run(recordId, userId);
+
             });
 
+            deleteCustomer(row.id, req.user.id);
+
+            res.json({
+                message: "Customer deleted successfully."
+            });
+        } catch (err) {
+            next(err);
         }
-
-        const deleteCustomer = db.transaction((recordId) => {
-
-            db.prepare(`
-                DELETE FROM interest_payments
-                WHERE record_id = ?
-            `).run(recordId);
-
-            db.prepare(`
-                DELETE FROM records
-                WHERE id = ?
-            `).run(recordId);
-
-        });
-
-        deleteCustomer(row.id);
-
-        res.json({
-            message: "Customer deleted successfully."
-        });
 
     }
 );
 
+// Global Error Handling Middleware
+app.use((err, _req, res, _next) => {
+  console.error('UNCAUGHT ERROR:', err);
+  if (res.headersSent) {
+    return _next(err);
+  }
+  res.status(err.status || 500).json({
+    error: 'An internal server error occurred.',
+  });
+});
 
 app.use(express.static(path.join(__dirname, 'public')));
 
