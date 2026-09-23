@@ -28,13 +28,13 @@ const LOCKOUT_ATTEMPTS = 5;
 const LOCKOUT_DURATION_MS = 15 * 60 * 1000;
 const CSRF_TTL_MS = 8 * 60 * 60 * 1000;
 
-const dataDir = path.join(__dirname, 'data');
+const dataDir = process.env.DATA_DIR || path.join(__dirname, 'data');
 if (!fs.existsSync(dataDir)) fs.mkdirSync(dataDir, { recursive: true });
 
 const db = new Database(path.join(dataDir, 'manibhadra.db'));
 db.pragma('journal_mode = WAL');
 
-const backupDir = path.join(__dirname, 'backups');
+const backupDir = process.env.BACKUP_DIR || path.join(__dirname, 'backups');
 
 if (!fs.existsSync(backupDir)) {
   fs.mkdirSync(backupDir, { recursive: true });
@@ -590,6 +590,10 @@ function requireCsrf(req, res, next) {
 }
 
 const app = express();
+
+if (IS_PRODUCTION) {
+  app.set('trust proxy', 1);
+}
 
 app.use(
   helmet({
