@@ -9,7 +9,6 @@
   },
   "dependencies": {
     "bcrypt": "^6.0.0",
-    "better-sqlite3": "^11.8.1",
     "cookie-parser": "^1.4.7",
     "dotenv": "^16.4.7",
     "express": "^4.21.2",
@@ -18,7 +17,8 @@
     "helmet": "^8.0.0",
     "jsonwebtoken": "^9.0.2",
     "jspdf": "^4.2.1",
-    "jspdf-autotable": "^5.0.8"
+    "jspdf-autotable": "^5.0.8",
+    "pg": "^8.13.3"
   },
   "engines": {
     "node": "20.x"

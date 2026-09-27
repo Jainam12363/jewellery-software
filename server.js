@@ -7,9 +7,8 @@ const rateLimit = require('express-rate-limit');
 const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
 const { body, query, validationResult } = require('express-validator');
-const Database = require('better-sqlite3');
+const { Pool } = require('pg');
 const crypto = require('crypto');
-const fs = require('fs');
 const path = require('path');
 
 const PORT = Number(process.env.PORT) || 3000;
@@ -22,101 +21,97 @@ if (!JWT_SECRET || JWT_SECRET.length < 32) {
   process.exit(1);
 }
 
+if (!process.env.DATABASE_URL) {
+  console.error('ERROR: Set DATABASE_URL in .env. See .env.example');
+  process.exit(1);
+}
+
 const BCRYPT_ROUNDS = 12;
 const JWT_EXPIRY = '8h';
 const LOCKOUT_ATTEMPTS = 5;
 const LOCKOUT_DURATION_MS = 15 * 60 * 1000;
 const CSRF_TTL_MS = 8 * 60 * 60 * 1000;
 
-const dataDir = process.env.DATA_DIR || path.join(__dirname, 'data');
-if (!fs.existsSync(dataDir)) fs.mkdirSync(dataDir, { recursive: true });
+// ---------------------------------------------------------------------------
+// PostgreSQL Connection Pool
+// ---------------------------------------------------------------------------
 
-const db = new Database(path.join(dataDir, 'manibhadra.db'));
-db.pragma('journal_mode = WAL');
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  ssl: { rejectUnauthorized: false },
+  max: 10,
+  idleTimeoutMillis: 30000,
+  connectionTimeoutMillis: 10000,
+});
 
-const backupDir = process.env.BACKUP_DIR || path.join(__dirname, 'backups');
+pool.on('error', (err) => {
+  console.error('PostgreSQL pool error:', err.message);
+});
 
-if (!fs.existsSync(backupDir)) {
-  fs.mkdirSync(backupDir, { recursive: true });
-}
+// ---------------------------------------------------------------------------
+// Schema Initialisation
+// ---------------------------------------------------------------------------
 
-async function createDatabaseBackup() {
+async function initSchema() {
+  const client = await pool.connect();
   try {
-    const timestamp = new Date()
-      .toISOString()
-      .replace(/[:.]/g, '-');
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS users (
+        id TEXT PRIMARY KEY,
+        username TEXT NOT NULL,
+        email TEXT NOT NULL,
+        password_hash TEXT NOT NULL,
+        token_version INTEGER NOT NULL DEFAULT 0,
+        failed_login_attempts INTEGER NOT NULL DEFAULT 0,
+        locked_until TEXT,
+        created_at TEXT NOT NULL,
+        UNIQUE (username),
+        UNIQUE (email)
+      );
 
-    const backupPath = path.join(
-      backupDir,
-      `manibhadra-${timestamp}.db`
-    );
+      CREATE TABLE IF NOT EXISTS records (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL,
+        party TEXT NOT NULL,
+        packet_no INTEGER NOT NULL,
+        customer_name TEXT NOT NULL,
+        phone_number TEXT NOT NULL,
+        item TEXT NOT NULL,
+        item_name TEXT NOT NULL,
+        amount REAL NOT NULL,
+        quantity INTEGER NOT NULL,
+        weight REAL NOT NULL,
+        entry_date TEXT NOT NULL,
+        release_date TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'ACTIVE',
+        rate_of_interest REAL NOT NULL,
+        top_ups TEXT NOT NULL DEFAULT '[]',
+        paid_ups TEXT NOT NULL DEFAULT '[]',
+        created_at TEXT NOT NULL,
+        UNIQUE (user_id, party, packet_no)
+      );
 
-    await db.backup(backupPath);
-
-    console.log(`Database backup created: ${backupPath}`);
-  } catch (err) {
-    console.error('DATABASE BACKUP ERROR:', err.message);
+      CREATE TABLE IF NOT EXISTS interest_payments (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL,
+        record_id TEXT NOT NULL,
+        interest_start_date TEXT NOT NULL,
+        interest_paid_till TEXT NOT NULL,
+        interest_amount REAL NOT NULL,
+        payment_date TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        FOREIGN KEY (record_id) REFERENCES records(id)
+      );
+    `);
+    console.log('PostgreSQL schema ready.');
+  } finally {
+    client.release();
   }
 }
 
-db.exec(`
-  CREATE TABLE IF NOT EXISTS users (
-    id TEXT PRIMARY KEY,
-    username TEXT NOT NULL UNIQUE COLLATE NOCASE,
-    email TEXT NOT NULL UNIQUE COLLATE NOCASE,
-    password_hash TEXT NOT NULL,
-    token_version INTEGER NOT NULL DEFAULT 0,
-    failed_login_attempts INTEGER NOT NULL DEFAULT 0,
-    locked_until TEXT,
-    created_at TEXT NOT NULL
-  );
-
-  CREATE TABLE IF NOT EXISTS records (
-    id TEXT PRIMARY KEY,
-    user_id TEXT NOT NULL,
-    party TEXT NOT NULL,
-    packet_no INTEGER NOT NULL,
-    customer_name TEXT NOT NULL,
-    phone_number TEXT NOT NULL,
-    item TEXT NOT NULL,
-    item_name TEXT NOT NULL,
-    amount REAL NOT NULL,
-    quantity INTEGER NOT NULL,
-    weight REAL NOT NULL,
-    entry_date TEXT NOT NULL,
-    release_date TEXT NOT NULL,
-    status TEXT NOT NULL DEFAULT 'ACTIVE',
-    rate_of_interest REAL NOT NULL,
-    top_ups TEXT NOT NULL DEFAULT '[]',
-
-    paid_ups TEXT NOT NULL DEFAULT '[]',
-
-    created_at TEXT NOT NULL,
-    UNIQUE(user_id, party, packet_no)
-  );
-
-  CREATE TABLE IF NOT EXISTS interest_payments (
-
-    id TEXT PRIMARY KEY,
-
-    user_id TEXT NOT NULL,
-
-    record_id TEXT NOT NULL,
-
-    interest_start_date TEXT NOT NULL,
-
-    interest_paid_till TEXT NOT NULL,
-
-    interest_amount REAL NOT NULL,
-
-    payment_date TEXT NOT NULL,
-
-    created_at TEXT NOT NULL,
-
-    FOREIGN KEY(record_id) REFERENCES records(id)
-
-  );
-`);
+// ---------------------------------------------------------------------------
+// CSRF token store (in-memory, unchanged from SQLite version)
+// ---------------------------------------------------------------------------
 
 const csrfTokens = new Map();
 
@@ -152,6 +147,10 @@ function revokeCsrfTokensForUser(userId) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Input validation helpers (unchanged)
+// ---------------------------------------------------------------------------
+
 const PASSWORD_REGEX =
   /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[!@#$%^&*()_+\-=[\]{};':"\\|,.<>/?]).{8,128}$/;
 
@@ -165,6 +164,10 @@ function validationErrors(req, res) {
   }
   return false;
 }
+
+// ---------------------------------------------------------------------------
+// Business logic helpers (unchanged — pure JS, no DB access)
+// ---------------------------------------------------------------------------
 
 function rowToRecord(row) {
   return {
@@ -183,7 +186,6 @@ function rowToRecord(row) {
     status: row.status,
     rateOfInterest: row.rate_of_interest,
     topUps: JSON.parse(row.top_ups || '[]'),
-
     paidUps: JSON.parse(row.paid_ups || '[]'),
     interestPayments: [],
     createdAt: row.created_at,
@@ -191,45 +193,25 @@ function rowToRecord(row) {
 }
 
 function getCurrentPrincipal(record) {
-
     let principal = Number(record.amount);
-
     const topUps = record.topUps || [];
     const paidUps = record.paidUps || [];
-
-    topUps.forEach(topup => {
-        principal += Number(topup.amount);
-    });
-
-    paidUps.forEach(paidup => {
-        principal -= Number(paidup.amount);
-    });
-
+    topUps.forEach(topup => { principal += Number(topup.amount); });
+    paidUps.forEach(paidup => { principal -= Number(paidup.amount); });
     return principal;
 }
 
 function calculateInterestForPeriod(record, startDate, endDate) {
-
     const roi = Number(record.rateOfInterest);
-
     let principal = Number(record.amount);
-
     const transactions = [];
 
     (record.topUps || []).forEach(topup => {
-        transactions.push({
-            type: 'TOPUP',
-            date: topup.date,
-            amount: Number(topup.amount)
-        });
+        transactions.push({ type: 'TOPUP', date: topup.date, amount: Number(topup.amount) });
     });
 
     (record.paidUps || []).forEach(paidup => {
-        transactions.push({
-            type: 'PAIDUP',
-            date: paidup.date,
-            amount: Number(paidup.amount)
-        });
+        transactions.push({ type: 'PAIDUP', date: paidup.date, amount: Number(paidup.amount) });
     });
 
     transactions.sort((a, b) => new Date(a.date) - new Date(b.date));
@@ -237,10 +219,8 @@ function calculateInterestForPeriod(record, startDate, endDate) {
     // Bring principal to the value on startDate
     for (const tx of transactions) {
         if (new Date(tx.date) < new Date(startDate)) {
-            if (tx.type === 'TOPUP')
-                principal += tx.amount;
-            else
-                principal -= tx.amount;
+            if (tx.type === 'TOPUP') principal += tx.amount;
+            else principal -= tx.amount;
         }
     }
 
@@ -248,12 +228,10 @@ function calculateInterestForPeriod(record, startDate, endDate) {
     let totalInterest = 0;
 
     for (const tx of transactions) {
-
         if (
             new Date(tx.date) < new Date(startDate) ||
             new Date(tx.date) > new Date(endDate)
-        )
-            continue;
+        ) continue;
 
         const days =
           Math.floor(
@@ -261,13 +239,10 @@ function calculateInterestForPeriod(record, startDate, endDate) {
               / (1000 * 60 * 60 * 24)
           ) + 1;
 
-        totalInterest +=
-            (principal * roi * days) / (100 * 30);
+        totalInterest += (principal * roi * days) / (100 * 30);
 
-        if (tx.type === 'TOPUP')
-            principal += tx.amount;
-        else
-            principal -= tx.amount;
+        if (tx.type === 'TOPUP') principal += tx.amount;
+        else principal -= tx.amount;
 
         currentDate = tx.date;
     }
@@ -278,19 +253,14 @@ function calculateInterestForPeriod(record, startDate, endDate) {
             / (1000 * 60 * 60 * 24)
         ) + 1;
 
-    totalInterest +=
-        (principal * roi * remainingDays)
-        / (100 * 30);
+    totalInterest += (principal * roi * remainingDays) / (100 * 30);
 
     return totalInterest;
 }
 
 
 function getReleaseSummary(record) {
-
-    if (record.status !== 'RELEASED') {
-        return null;
-    }
+    if (record.status !== 'RELEASED') return null;
 
     const principalPaid = getCurrentPrincipal(record);
 
@@ -302,19 +272,13 @@ function getReleaseSummary(record) {
     let interestStartDate;
 
     if (record.interestPayments.length > 0) {
-
         const lastPaidTill =
             record.interestPayments[record.interestPayments.length - 1].interestPaidTill;
-
         const nextDate = new Date(lastPaidTill);
         nextDate.setDate(nextDate.getDate() + 1);
-
         interestStartDate = nextDate.toISOString().split('T')[0];
-
     } else {
-
         interestStartDate = record.entryDate;
-
     }
 
     const remainingInterest = calculateInterestForPeriod(
@@ -323,139 +287,79 @@ function getReleaseSummary(record) {
         record.releaseDate
     );
 
-    const totalInterest =
-        interestAlreadyPaid + remainingInterest;
+    const totalInterest = interestAlreadyPaid + remainingInterest;
 
     return {
-
         principalPaid,
-
         interestAlreadyPaid,
-
         remainingInterest,
-
         totalInterest,
-
         totalPaid: principalPaid + remainingInterest
-
     };
-
 }
 
 
 function addEntryTransaction(timeline, record) {
-
     timeline.push({
-
         type: 'ENTRY',
-
         date: record.entryDate,
-
         createdAt: record.createdAt,
-
         principal: Number(record.amount),
-
         title: 'Loan Entry'
-
     });
-
 }
 
 function addTopupTransactions(timeline, record) {
-
     (record.topUps || []).forEach(topup => {
-
         timeline.push({
-
             type: 'TOPUP',
-
             title: 'Top-Up',
-
             date: topup.date,
-
             createdAt: topup.createdAt,
-
             amount: Number(topup.amount)
-
         });
-
     });
-
 }
 
 function addPaidupTransactions(timeline, record) {
-
     (record.paidUps || []).forEach(paidup => {
-
         timeline.push({
-
             type: 'PAIDUP',
-
             title: 'Paid-Up',
-
             date: paidup.date,
-
             createdAt: paidup.createdAt,
-
             amount: Number(paidup.amount)
-
         });
-
     });
-
 }
 
 function addInterestTransactions(timeline, record) {
-
     (record.interestPayments || []).forEach(payment => {
-
         timeline.push({
-
             type: 'INTEREST',
-
             title: 'Interest Payment',
-
             date: payment.date,
-
             createdAt: payment.createdAt,
-
             amount: Number(payment.amount),
-
             paidTill: payment.interestPaidTill
-
         });
-
     });
-
 }
 
 function addReleaseTransaction(timeline, record) {
-
-    if (record.status !== 'RELEASED')
-        return;
-
+    if (record.status !== 'RELEASED') return;
     const release = getReleaseSummary(record);
-
     timeline.push({
-
         type: 'RELEASE',
-
         title: 'Release',
-
         date: record.releaseDate,
-
         principalPaid: release.principalPaid,
-
         interestPaid: release.remainingInterest,
-
         totalPaid: release.totalPaid
-
     });
-
 }
 
 function buildLedgerTimeline(record) {
-
     const timeline = [];
 
     addEntryTransaction(timeline, record);
@@ -465,68 +369,47 @@ function buildLedgerTimeline(record) {
     addReleaseTransaction(timeline, record);
 
     timeline.sort((a, b) => {
-
         const dateDiff = new Date(a.date) - new Date(b.date);
-
-        if (dateDiff !== 0) {
-            return dateDiff;
-        }
-
-        const createdA = a.createdAt
-            ? new Date(a.createdAt).getTime()
-            : 0;
-
-        const createdB = b.createdAt
-            ? new Date(b.createdAt).getTime()
-            : 0;
-
+        if (dateDiff !== 0) return dateDiff;
+        const createdA = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+        const createdB = b.createdAt ? new Date(b.createdAt).getTime() : 0;
         return createdA - createdB;
-
     });
 
     let principal = Number(record.amount);
 
     timeline.forEach(event => {
-
         switch (event.type) {
-
             case 'ENTRY':
-
                 event.principalAfter = principal;
                 break;
-
             case 'TOPUP':
-
                 principal += event.amount;
                 event.principalAfter = principal;
                 break;
-
             case 'PAIDUP':
-
                 principal -= event.amount;
                 event.principalAfter = principal;
                 break;
-
             case 'INTEREST':
-
                 event.principalAfter = principal;
                 break;
-
             case 'RELEASE':
-
                 event.principalAfter = principal;
                 break;
-
         }
-
     });
 
     return timeline;
-
 }
 
-function getUserById(id) {
-  return db.prepare('SELECT * FROM users WHERE id = ?').get(id);
+// ---------------------------------------------------------------------------
+// Auth helpers
+// ---------------------------------------------------------------------------
+
+async function getUserById(id) {
+  const result = await pool.query('SELECT * FROM users WHERE id = $1', [id]);
+  return result.rows[0] || null;
 }
 
 function signToken(user) {
@@ -556,7 +439,7 @@ function clearAuthCookie(res) {
   });
 }
 
-function authenticate(req, res, next) {
+async function authenticate(req, res, next) {
   const token = req.cookies.auth_token;
   if (!token) {
     return res.status(401).json({ error: 'Authentication required.' });
@@ -564,7 +447,7 @@ function authenticate(req, res, next) {
 
   try {
     const payload = jwt.verify(token, JWT_SECRET, { issuer: 'manibhadra-jewellers' });
-    const user = getUserById(payload.sub);
+    const user = await getUserById(payload.sub);
     if (!user || user.token_version !== payload.tv) {
       clearAuthCookie(res);
       return res.status(401).json({ error: 'Session expired. Please log in again.' });
@@ -589,11 +472,11 @@ function requireCsrf(req, res, next) {
   next();
 }
 
-const app = express();
+// ---------------------------------------------------------------------------
+// Express setup
+// ---------------------------------------------------------------------------
 
-if (IS_PRODUCTION) {
-  app.set('trust proxy', 1);
-}
+const app = express();
 
 app.use(
   helmet({
@@ -651,6 +534,10 @@ app.use('/api/auth/login', authLimiter);
 app.use('/api/auth/register', authLimiter);
 app.use('/api', apiLimiter);
 
+// ---------------------------------------------------------------------------
+// AUTH ROUTES
+// ---------------------------------------------------------------------------
+
 app.post(
   '/api/auth/register',
   [
@@ -679,10 +566,11 @@ app.post(
 
       const { username, email, password } = req.body;
 
-      const existing = db
-        .prepare('SELECT id FROM users WHERE username = ? OR email = ? COLLATE NOCASE')
-        .get(username, email);
-      if (existing) {
+      const existing = await pool.query(
+        'SELECT id FROM users WHERE LOWER(username) = LOWER($1) OR LOWER(email) = LOWER($2)',
+        [username, email]
+      );
+      if (existing.rows.length > 0) {
         return res.status(409).json({ error: 'Username or email is already registered.' });
       }
 
@@ -690,10 +578,11 @@ app.post(
       const id = crypto.randomUUID();
       const createdAt = new Date().toISOString();
 
-      db.prepare(
+      await pool.query(
         `INSERT INTO users (id, username, email, password_hash, created_at)
-         VALUES (?, ?, ?, ?, ?)`
-      ).run(id, username, email, passwordHash, createdAt);
+         VALUES ($1, $2, $3, $4, $5)`,
+        [id, username, email, passwordHash, createdAt]
+      );
 
       res.status(201).json({ message: 'Account created successfully. You can now log in.' });
     } catch (err) {
@@ -722,13 +611,13 @@ app.post(
       const identifier = req.body.identifier.trim();
       const password = req.body.password;
 
-      const user = db.prepare(`
-        SELECT *
-        FROM users
-        WHERE username = ? COLLATE NOCASE
-          OR email = ? COLLATE NOCASE
-      `).get(identifier, identifier);
+      const userResult = await pool.query(
+        `SELECT * FROM users
+         WHERE LOWER(username) = LOWER($1) OR LOWER(email) = LOWER($2)`,
+        [identifier, identifier]
+      );
 
+      const user = userResult.rows[0] || null;
 
       if (!user) {
         await bcrypt.hash(password, BCRYPT_ROUNDS);
@@ -752,9 +641,10 @@ app.post(
         if (attempts >= LOCKOUT_ATTEMPTS) {
           lockedUntil = new Date(Date.now() + LOCKOUT_DURATION_MS).toISOString();
         }
-        db.prepare(
-          `UPDATE users SET failed_login_attempts = ?, locked_until = ? WHERE id = ?`
-        ).run(attempts, lockedUntil, user.id);
+        await pool.query(
+          `UPDATE users SET failed_login_attempts = $1, locked_until = $2 WHERE id = $3`,
+          [attempts, lockedUntil, user.id]
+        );
 
         if (lockedUntil) {
           return res.status(429).json({
@@ -764,9 +654,10 @@ app.post(
         return res.status(401).json({ error: 'Invalid username/email or password.' });
       }
 
-      db.prepare(
-        `UPDATE users SET failed_login_attempts = 0, locked_until = NULL WHERE id = ?`
-      ).run(user.id);
+      await pool.query(
+        `UPDATE users SET failed_login_attempts = 0, locked_until = NULL WHERE id = $1`,
+        [user.id]
+      );
 
       console.log(`SECURITY: Successful login for user ID ${user.id}.`);
 
@@ -785,14 +676,18 @@ app.post(
   }
 );
 
-app.post('/api/auth/logout', authenticate, requireCsrf, (req, res) => {
-  const user = getUserById(req.user.id);
-  if (user) {
-    db.prepare('UPDATE users SET token_version = token_version + 1 WHERE id = ?').run(user.id);
-    revokeCsrfTokensForUser(user.id);
+app.post('/api/auth/logout', authenticate, requireCsrf, async (req, res, next) => {
+  try {
+    const user = await getUserById(req.user.id);
+    if (user) {
+      await pool.query('UPDATE users SET token_version = token_version + 1 WHERE id = $1', [user.id]);
+      revokeCsrfTokensForUser(user.id);
+    }
+    clearAuthCookie(res);
+    res.json({ message: 'Logged out successfully.' });
+  } catch (err) {
+    next(err);
   }
-  clearAuthCookie(res);
-  res.json({ message: 'Logged out successfully.' });
 });
 
 app.get('/api/auth/me', authenticate, (req, res) => {
@@ -815,7 +710,7 @@ app.get(
     query('party').isString().trim().notEmpty().isLength({ max: 30 }).withMessage('Invalid party.'),
     query('date').isString().isISO8601({ strict: false }).withMessage('Invalid report date.')
   ],
-  (req, res, next) => {
+  async (req, res, next) => {
 
     if (validationErrors(req, res)) return;
 
@@ -827,18 +722,12 @@ app.get(
        * Get all customers belonging to the logged-in user
        * and selected party.
        */
-      const rows = db.prepare(`
-        SELECT *
-        FROM records
-        WHERE user_id = ?
-          AND party = ?
-        ORDER BY packet_no
-      `).all(
-        req.user.id,
-        party
+      const rowsResult = await pool.query(
+        `SELECT * FROM records WHERE user_id = $1 AND party = $2 ORDER BY packet_no`,
+        [req.user.id, party]
       );
 
-
+      const rows = rowsResult.rows;
       const reportRecords = [];
 
       for (const row of rows) {
@@ -852,9 +741,7 @@ app.get(
          * 1. Their entry date is on/before the report date.
          * 2. They were not released on/before the report date.
          */
-        if (
-          new Date(record.entryDate) > new Date(date)
-        ) {
+        if (new Date(record.entryDate) > new Date(date)) {
           continue;
         }
 
@@ -871,43 +758,22 @@ app.get(
          * ----------------------------------------------------
          * Current Principal as of report date
          * ----------------------------------------------------
-         *
-         * Start with the original principal and apply only
-         * transactions that happened on/before the report date.
          */
 
-        let currentPrincipal =
-          Number(record.amount);
-
+        let currentPrincipal = Number(record.amount);
 
         const topUpsTillDate =
           (record.topUps || []).filter(
-            topup =>
-              new Date(topup.date) <= new Date(date)
+            topup => new Date(topup.date) <= new Date(date)
           );
-
 
         const paidUpsTillDate =
           (record.paidUps || []).filter(
-            paidup =>
-              new Date(paidup.date) <= new Date(date)
+            paidup => new Date(paidup.date) <= new Date(date)
           );
 
-
-        topUpsTillDate.forEach(topup => {
-
-          currentPrincipal +=
-            Number(topup.amount);
-
-        });
-
-
-        paidUpsTillDate.forEach(paidup => {
-
-          currentPrincipal -=
-            Number(paidup.amount);
-
-        });
+        topUpsTillDate.forEach(topup => { currentPrincipal += Number(topup.amount); });
+        paidUpsTillDate.forEach(paidup => { currentPrincipal -= Number(paidup.amount); });
 
 
         /*
@@ -916,99 +782,61 @@ app.get(
          * ----------------------------------------------------
          */
 
-        const interestPayments =
-          db.prepare(`
-            SELECT
-              payment_date,
-              interest_paid_till,
-              interest_amount
-            FROM interest_payments
-            WHERE record_id = ?
-              AND interest_paid_till <= ?
-            ORDER BY interest_paid_till
-          `).all(
-            row.id,
-            date
-          );
+        const ipResult = await pool.query(
+          `SELECT payment_date, interest_paid_till, interest_amount
+           FROM interest_payments
+           WHERE record_id = $1 AND interest_paid_till <= $2
+           ORDER BY interest_paid_till`,
+          [row.id, date]
+        );
 
+        const interestPayments = ipResult.rows;
 
-        const interestPaid =
-          interestPayments.reduce(
-            (sum, payment) =>
-              sum + Number(payment.interest_amount),
-            0
-          );
+        const interestPaid = interestPayments.reduce(
+          (sum, payment) => sum + Number(payment.interest_amount),
+          0
+        );
 
 
         /*
          * ----------------------------------------------------
          * Interest Accrued Till Report Date
          * ----------------------------------------------------
-         *
-         * Reuse the application's existing interest
-         * calculation so the report follows the same
-         * calculation rules as the rest of the application.
          */
 
-        const interestAccrued =
-          calculateInterestForPeriod(
-            {
-              ...record,
-              topUps: topUpsTillDate,
-              paidUps: paidUpsTillDate
-            },
-            record.entryDate,
-            date
-          );
+        const interestAccrued = calculateInterestForPeriod(
+          {
+            ...record,
+            topUps: topUpsTillDate,
+            paidUps: paidUpsTillDate
+          },
+          record.entryDate,
+          date
+        );
 
 
         /*
-         * Interest that has accrued but has not yet
-         * been paid.
+         * Interest that has accrued but has not yet been paid.
          */
-
-        const pendingInterest =
-          Math.max(
-            0,
-            interestAccrued - interestPaid
-          );
-
+        const pendingInterest = Math.max(0, interestAccrued - interestPaid);
 
         /*
-         * Total amount recoverable as of the
-         * selected report date.
+         * Total amount recoverable as of the selected report date.
          */
-
-        const totalRecoverable =
-          currentPrincipal + pendingInterest;
-
+        const totalRecoverable = currentPrincipal + pendingInterest;
 
         reportRecords.push({
-
           packetNo: record.packetNo,
-
           customerName: record.customerName,
-
           phoneNumber: record.phoneNumber,
-
           entryDate: record.entryDate,
-
-          initialPrincipal:
-            Number(record.amount),
-
+          initialPrincipal: Number(record.amount),
           currentPrincipal,
-
-          rateOfInterest:
-            Number(record.rateOfInterest),
-
+          rateOfInterest: Number(record.rateOfInterest),
           interestAccrued,
-
           interestPaid,
-
           pendingInterest,
-
           totalRecoverable
-
         });
 
       }
@@ -1021,88 +849,35 @@ app.get(
        */
 
       const summary = {
-
-        totalCustomers:
-          reportRecords.length,
-
-        totalInitialPrincipal:
-          reportRecords.reduce(
-            (sum, customer) =>
-              sum + customer.initialPrincipal,
-            0
-          ),
-
-        totalCurrentPrincipal:
-          reportRecords.reduce(
-            (sum, customer) =>
-              sum + customer.currentPrincipal,
-            0
-          ),
-
-        totalInterestAccrued:
-          reportRecords.reduce(
-            (sum, customer) =>
-              sum + customer.interestAccrued,
-            0
-          ),
-
-        totalInterestPaid:
-          reportRecords.reduce(
-            (sum, customer) =>
-              sum + customer.interestPaid,
-            0
-          ),
-
-        totalPendingInterest:
-          reportRecords.reduce(
-            (sum, customer) =>
-              sum + customer.pendingInterest,
-            0
-          ),
-
-        totalRecoverable:
-          reportRecords.reduce(
-            (sum, customer) =>
-              sum + customer.totalRecoverable,
-            0
-          )
-
+        totalCustomers: reportRecords.length,
+        totalInitialPrincipal: reportRecords.reduce((sum, c) => sum + c.initialPrincipal, 0),
+        totalCurrentPrincipal: reportRecords.reduce((sum, c) => sum + c.currentPrincipal, 0),
+        totalInterestAccrued: reportRecords.reduce((sum, c) => sum + c.interestAccrued, 0),
+        totalInterestPaid: reportRecords.reduce((sum, c) => sum + c.interestPaid, 0),
+        totalPendingInterest: reportRecords.reduce((sum, c) => sum + c.pendingInterest, 0),
+        totalRecoverable: reportRecords.reduce((sum, c) => sum + c.totalRecoverable, 0)
       };
 
-
       res.json({
-
         reportType: 'existing',
-
         party,
-
         reportDate: date,
-
         summary,
-
         records: reportRecords
-
       });
 
     }
     catch (err) {
-
-      console.error(
-        'Existing customers report error:',
-        err
-      );
-
-      res.status(500).json({
-
-        error:
-          'Failed to generate existing customers report.'
-
-      });
-
+      console.error('Existing customers report error:', err);
+      res.status(500).json({ error: 'Failed to generate existing customers report.' });
     }
 
   }
 );
+
+// ============================================================
+// GET /api/records  — list / search records
+// ============================================================
 
 app.get(
   '/api/records',
@@ -1127,14 +902,18 @@ app.get(
       .isLength({ max: 100 })
       .withMessage('Invalid customer name.'),
   ],
-  (req, res, next) => {
+  async (req, res, next) => {
     try {
       if (validationErrors(req, res)) return;
 
       const { party, packetNo, name } = req.query;
-      let rows = db.prepare(
-        'SELECT * FROM records WHERE user_id = ? ORDER BY created_at DESC'
-      ).all(req.user.id);
+
+      let rowsResult = await pool.query(
+        'SELECT * FROM records WHERE user_id = $1 ORDER BY created_at DESC',
+        [req.user.id]
+      );
+
+      let rows = rowsResult.rows;
 
       if (party) rows = rows.filter((r) => r.party === party);
       if (packetNo) rows = rows.filter((r) => r.packet_no === Number(packetNo));
@@ -1143,26 +922,21 @@ app.get(
         rows = rows.filter((r) => r.customer_name.toLowerCase().includes(q));
       }
 
-      const records = rows.map(row => {
-
+      const records = await Promise.all(rows.map(async (row) => {
           const record = rowToRecord(row);
 
-          record.interestPayments = db.prepare(`
-              SELECT
-                  payment_date,
-                  interest_paid_till,
-                  interest_amount
-              FROM interest_payments
-              WHERE record_id = ? AND user_id = ?
-              ORDER BY payment_date
-          `).all(row.id, req.user.id).map(item => ({
+          const ipResult = await pool.query(
+            `SELECT payment_date, interest_paid_till, interest_amount
+             FROM interest_payments
+             WHERE record_id = $1 AND user_id = $2
+             ORDER BY payment_date`,
+            [row.id, req.user.id]
+          );
 
-              date: item.payment_date,
-
-              interestPaidTill: item.interest_paid_till,
-
-              amount: item.interest_amount
-
+          record.interestPayments = ipResult.rows.map(item => ({
+            date: item.payment_date,
+            interestPaidTill: item.interest_paid_till,
+            amount: item.interest_amount
           }));
 
           record.hasTransactions =
@@ -1171,18 +945,19 @@ app.get(
               record.interestPayments.length > 0;
 
           return record;
+      }));
 
-      });
-
-      res.json({
-          records
-      });
+      res.json({ records });
     } catch (err) {
       next(err);
     }
   }
 );
 
+
+// ============================================================
+// GET /api/ledger
+// ============================================================
 
 app.get(
   '/api/ledger',
@@ -1206,7 +981,7 @@ app.get(
       .isLength({ max: 100 })
       .withMessage('Invalid customer name.'),
   ],
-  (req, res, next) => {
+  async (req, res, next) => {
 
     try {
 
@@ -1218,36 +993,25 @@ app.get(
 
         if (packetNo) {
 
-            row = db.prepare(`
-                SELECT *
-                FROM records
-                WHERE user_id = ?
-                  AND party = ?
-                  AND packet_no = ?
-            `).get(
-                req.user.id,
-                party,
-                packetNo
+            const result = await pool.query(
+              `SELECT * FROM records
+               WHERE user_id = $1 AND party = $2 AND packet_no = $3`,
+              [req.user.id, party, packetNo]
             );
+            row = result.rows[0] || null;
 
         }
         else if (name) {
 
-            const rows = db.prepare(`
-                SELECT *
-                FROM records
-                WHERE user_id = ?
-                  AND party = ?
-                  AND customer_name LIKE ?
-                ORDER BY customer_name
-            `).all(
-                req.user.id,
-                party,
-                `%${name}%`
+            const result = await pool.query(
+              `SELECT * FROM records
+               WHERE user_id = $1 AND party = $2 AND LOWER(customer_name) LIKE LOWER($3)
+               ORDER BY customer_name`,
+              [req.user.id, party, `%${name}%`]
             );
 
             return res.json({
-                records: rows.map(rowToRecord)
+                records: result.rows.map(rowToRecord)
             });
 
         }
@@ -1260,64 +1024,41 @@ app.get(
         }
 
         if (!row) {
-
-            return res.status(404).json({
-                error: 'Customer not found.'
-            });
-
+            return res.status(404).json({ error: 'Customer not found.' });
         }
 
         const record = rowToRecord(row);
 
         // Interest Payment History
-        record.interestPayments = db.prepare(`
-            SELECT
-                payment_date,
-                interest_paid_till,
-                interest_amount,
-                created_at
-            FROM interest_payments
-            WHERE record_id = ?
-            ORDER BY payment_date
-        `).all(row.id).map(payment => ({
+        const ipResult = await pool.query(
+          `SELECT payment_date, interest_paid_till, interest_amount, created_at
+           FROM interest_payments
+           WHERE record_id = $1
+           ORDER BY payment_date`,
+          [row.id]
+        );
 
+        record.interestPayments = ipResult.rows.map(payment => ({
             date: payment.payment_date,
-
             createdAt: payment.created_at,
-
             interestPaidTill: payment.interest_paid_till,
-
             amount: Number(payment.interest_amount)
-
         }));
 
 
         const summary = {
-
             currentPrincipal: getCurrentPrincipal(record),
-
             totalInterestPaid: record.interestPayments.reduce(
                 (sum, payment) => sum + payment.amount,
                 0
             ),
-
             topupCount: record.topUps.length,
-
             paidupCount: record.paidUps.length
-
         };
 
         const timeline = buildLedgerTimeline(record);
 
-        res.json({
-
-            record,
-
-            summary,
-
-            timeline
-
-        });
+        res.json({ record, summary, timeline });
 
     }
 
@@ -1326,6 +1067,10 @@ app.get(
     }
 
 });
+
+// ============================================================
+// POST /api/records — create record
+// ============================================================
 
 app.post(
   '/api/records',
@@ -1375,7 +1120,7 @@ app.post(
       .custom(Number.isFinite)
       .withMessage('Interest rate must be a finite number.'),
   ],
-  (req, res, next) => {
+  async (req, res, next) => {
     try {
       if (validationErrors(req, res)) return;
 
@@ -1393,68 +1138,60 @@ app.post(
       rateOfInterest,
     } = req.body;
 
-    const existing = db
-      .prepare(
-        'SELECT id FROM records WHERE user_id = ? AND party = ? AND packet_no = ?'
-      )
-      .get(req.user.id, party, packetNo);
-    if (existing) {
+    const existing = await pool.query(
+      'SELECT id FROM records WHERE user_id = $1 AND party = $2 AND packet_no = $3',
+      [req.user.id, party, packetNo]
+    );
+    if (existing.rows.length > 0) {
       return res.status(409).json({ error: `Packet ${packetNo} already exists for ${party}.` });
     }
 
     const id = crypto.randomUUID();
     const createdAt = new Date().toISOString();
 
-    db.prepare(
+    await pool.query(
       `INSERT INTO records (
+        id, user_id, party, packet_no, customer_name, phone_number,
+        item, item_name, amount, quantity, weight,
+        entry_date, release_date, status, rate_of_interest,
+        top_ups, paid_ups, created_at
+      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)`,
+      [
         id,
-        user_id,
+        req.user.id,
         party,
-        packet_no,
-        customer_name,
-        phone_number,
+        packetNo,
+        customerName,
+        phoneNumber,
         item,
-        item_name,
+        itemName,
         amount,
         quantity,
         weight,
-        entry_date,
-        release_date,
-        status,
-        rate_of_interest,
-        top_ups,
-        paid_ups,
-        created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-    ).run(
-      id,
-      req.user.id,
-      party,
-      packetNo,
-      customerName,
-      phoneNumber,
-      item,
-      itemName,
-      amount,
-      quantity,
-      weight,
-      entryDate,
-
-      '',          // Temporary release date
-      'ACTIVE',
-      rateOfInterest,
-      '[]',
-      '[]',
-      createdAt
+        entryDate,
+        '',          // Temporary release date
+        'ACTIVE',
+        rateOfInterest,
+        '[]',
+        '[]',
+        createdAt
+      ]
     );
 
-    const row = db.prepare('SELECT * FROM records WHERE id = ? AND user_id = ?').get(id, req.user.id);
-    res.status(201).json({ record: rowToRecord(row) });
+    const rowResult = await pool.query(
+      'SELECT * FROM records WHERE id = $1 AND user_id = $2',
+      [id, req.user.id]
+    );
+    res.status(201).json({ record: rowToRecord(rowResult.rows[0]) });
     } catch (err) {
       next(err);
     }
   }
 );
+
+// ============================================================
+// POST /api/records/topup
+// ============================================================
 
 app.post(
   '/api/records/topup',
@@ -1474,54 +1211,63 @@ app.post(
       .withMessage('Top-up amount must be a finite number.'),
     body('date').isString().isISO8601({ strict: false }).withMessage('Invalid top-up date.'),
   ],
-  (req, res, next) => {
+  async (req, res, next) => {
     try {
       if (validationErrors(req, res)) return;
 
       const { party, packetNo, amount, date } = req.body;
 
-      const executeTopUp = db.transaction(() => {
-        const row = db
-          .prepare(
-            'SELECT * FROM records WHERE user_id = ? AND party = ? AND packet_no = ?'
-          )
-          .get(req.user.id, party, packetNo);
+      const client = await pool.connect();
+      try {
+        await client.query('BEGIN');
+
+        const rowResult = await client.query(
+          'SELECT * FROM records WHERE user_id = $1 AND party = $2 AND packet_no = $3',
+          [req.user.id, party, packetNo]
+        );
+        const row = rowResult.rows[0];
 
         if (!row) {
-            return { status: 404, payload: { error: `No record found for Packet ${packetNo} under ${party}.` } };
+          await client.query('ROLLBACK');
+          return res.status(404).json({ error: `No record found for Packet ${packetNo} under ${party}.` });
         }
 
         if (row.status === 'RELEASED') {
-            return { status: 400, payload: { error: 'Customer has already been released. Top-Up is not allowed.' } };
+          await client.query('ROLLBACK');
+          return res.status(400).json({ error: 'Customer has already been released. Top-Up is not allowed.' });
         }
 
         if (new Date(date) <= new Date(row.entry_date)) {
-          return { status: 400, payload: { error: 'Top-up date must be after the entry date.' } };
+          await client.query('ROLLBACK');
+          return res.status(400).json({ error: 'Top-up date must be after the entry date.' });
         }
-        if (
-            row.release_date &&
-            new Date(date) >= new Date(row.release_date)
-        ) {
-            return { status: 400, payload: { error: 'Top-up date must be before the release date.' } };
+        if (row.release_date && new Date(date) >= new Date(row.release_date)) {
+          await client.query('ROLLBACK');
+          return res.status(400).json({ error: 'Top-up date must be before the release date.' });
         }
 
         const topUps = JSON.parse(row.top_ups || '[]');
-        topUps.push({
-            date,
-            amount: Number(amount),
-            createdAt: new Date().toISOString()
-        });
-        topUps.sort(
-            (a, b) => new Date(a.date) - new Date(b.date)
+        topUps.push({ date, amount: Number(amount), createdAt: new Date().toISOString() });
+        topUps.sort((a, b) => new Date(a.date) - new Date(b.date));
+
+        await client.query(
+          'UPDATE records SET top_ups = $1 WHERE id = $2 AND user_id = $3',
+          [JSON.stringify(topUps), row.id, req.user.id]
         );
-        db.prepare('UPDATE records SET top_ups = ? WHERE id = ? AND user_id = ?').run(JSON.stringify(topUps), row.id, req.user.id);
 
-        const updated = db.prepare('SELECT * FROM records WHERE id = ? AND user_id = ?').get(row.id, req.user.id);
-        return { status: 200, payload: { record: rowToRecord(updated) } };
-      });
+        const updatedResult = await client.query(
+          'SELECT * FROM records WHERE id = $1 AND user_id = $2',
+          [row.id, req.user.id]
+        );
 
-      const result = executeTopUp();
-      res.status(result.status).json(result.payload);
+        await client.query('COMMIT');
+        res.status(200).json({ record: rowToRecord(updatedResult.rows[0]) });
+      } catch (err) {
+        await client.query('ROLLBACK');
+        throw err;
+      } finally {
+        client.release();
+      }
     } catch (err) {
       next(err);
     }
@@ -1529,8 +1275,9 @@ app.post(
 );
 
 
-
-// paid up logic
+// ============================================================
+// POST /api/records/paidup
+// ============================================================
 
 app.post(
   '/api/records/paidup',
@@ -1550,67 +1297,72 @@ app.post(
       .withMessage('Paid-up amount must be a finite number.'),
     body('date').isString().isISO8601({ strict: false }).withMessage('Invalid paid-up date.'),
   ],
-  (req, res, next) => {
+  async (req, res, next) => {
     try {
       if (validationErrors(req, res)) return;
 
       const { party, packetNo, amount, date } = req.body;
 
-      const executePaidUp = db.transaction(() => {
-        const row = db
-          .prepare(
-            'SELECT * FROM records WHERE user_id = ? AND party = ? AND packet_no = ?'
-          )
-          .get(req.user.id, party, packetNo);
+      const client = await pool.connect();
+      try {
+        await client.query('BEGIN');
+
+        const rowResult = await client.query(
+          'SELECT * FROM records WHERE user_id = $1 AND party = $2 AND packet_no = $3',
+          [req.user.id, party, packetNo]
+        );
+        const row = rowResult.rows[0];
 
         if (!row) {
-            return { status: 404, payload: { error: `No record found for Packet ${packetNo} under ${party}.` } };
+          await client.query('ROLLBACK');
+          return res.status(404).json({ error: `No record found for Packet ${packetNo} under ${party}.` });
         }
 
         if (row.status === 'RELEASED') {
-            return { status: 400, payload: { error: 'Customer has already been released. Paid-Up is not allowed.' } };
+          await client.query('ROLLBACK');
+          return res.status(400).json({ error: 'Customer has already been released. Paid-Up is not allowed.' });
         }
 
         if (new Date(date) <= new Date(row.entry_date)) {
-          return { status: 400, payload: { error: 'Paid-Up date must be after the entry date.' } };
+          await client.query('ROLLBACK');
+          return res.status(400).json({ error: 'Paid-Up date must be after the entry date.' });
         }
-        if (
-            row.release_date &&
-            new Date(date) >= new Date(row.release_date)
-        ) {
-            return { status: 400, payload: { error: 'Paid-Up date must be before the release date.' } };
+        if (row.release_date && new Date(date) >= new Date(row.release_date)) {
+          await client.query('ROLLBACK');
+          return res.status(400).json({ error: 'Paid-Up date must be before the release date.' });
         }
 
         const paidUps = JSON.parse(row.paid_ups || '[]');
-        paidUps.push({
-            date,
-            amount: Number(amount),
-            createdAt: new Date().toISOString()
-        });
-        paidUps.sort(
-            (a, b) => new Date(a.date) - new Date(b.date)
+        paidUps.push({ date, amount: Number(amount), createdAt: new Date().toISOString() });
+        paidUps.sort((a, b) => new Date(a.date) - new Date(b.date));
+
+        await client.query(
+          'UPDATE records SET paid_ups = $1 WHERE id = $2 AND user_id = $3',
+          [JSON.stringify(paidUps), row.id, req.user.id]
         );
 
-        db.prepare(
-            'UPDATE records SET paid_ups = ? WHERE id = ? AND user_id = ?'
-        ).run(
-            JSON.stringify(paidUps),
-            row.id,
-            req.user.id
+        const updatedResult = await client.query(
+          'SELECT * FROM records WHERE id = $1 AND user_id = $2',
+          [row.id, req.user.id]
         );
 
-        const updated = db.prepare('SELECT * FROM records WHERE id = ? AND user_id = ?').get(row.id, req.user.id);
-        return { status: 200, payload: { record: rowToRecord(updated) } };
-      });
-
-      const result = executePaidUp();
-      res.status(result.status).json(result.payload);
+        await client.query('COMMIT');
+        res.status(200).json({ record: rowToRecord(updatedResult.rows[0]) });
+      } catch (err) {
+        await client.query('ROLLBACK');
+        throw err;
+      } finally {
+        client.release();
+      }
     } catch (err) {
       next(err);
     }
   }
 );
 
+// ============================================================
+// PUT /api/records/edit
+// ============================================================
 
 app.put(
   '/api/records/edit',
@@ -1664,7 +1416,7 @@ app.put(
       .withMessage('Interest rate must be a finite number.'),
   ],
 
-  (req, res, next) => {
+  async (req, res, next) => {
     try {
       if (validationErrors(req, res)) return;
 
@@ -1682,100 +1434,79 @@ app.put(
         rateOfInterest,
       } = req.body;
 
-      const executeEdit = db.transaction(() => {
-        const row = db.prepare(
-          `SELECT *
-           FROM records
-           WHERE user_id = ?
-           AND party = ?
-           AND packet_no = ?`
-        ).get(req.user.id, party, packetNo);
+      const client = await pool.connect();
+      try {
+        await client.query('BEGIN');
+
+        const rowResult = await client.query(
+          `SELECT * FROM records
+           WHERE user_id = $1 AND party = $2 AND packet_no = $3`,
+          [req.user.id, party, packetNo]
+        );
+        const row = rowResult.rows[0];
 
         if (!row) {
-          return { status: 404, payload: { error: 'Customer not found.' } };
+          await client.query('ROLLBACK');
+          return res.status(404).json({ error: 'Customer not found.' });
         }
 
+        const ipCountResult = await client.query(
+          `SELECT COUNT(*) AS count FROM interest_payments
+           WHERE record_id = $1 AND user_id = $2`,
+          [row.id, req.user.id]
+        );
+
         const hasTransactions =
-            JSON.parse(row.top_ups || "[]").length > 0 ||
-            JSON.parse(row.paid_ups || "[]").length > 0 ||
-            db.prepare(`
-                SELECT COUNT(*)
-                AS count
-                FROM interest_payments
-                WHERE record_id = ? AND user_id = ?
-            `).get(row.id, req.user.id).count > 0;
+            JSON.parse(row.top_ups || '[]').length > 0 ||
+            JSON.parse(row.paid_ups || '[]').length > 0 ||
+            Number(ipCountResult.rows[0].count) > 0;
 
         if (hasTransactions) {
 
-            db.prepare(`
-                UPDATE records
-                SET
-                    customer_name = ?,
-                    phone_number = ?,
-                    item = ?,
-                    item_name = ?,
-                    quantity = ?,
-                    weight = ?,
-                    entry_date = ?
-                WHERE id = ? AND user_id = ?
-            `).run(
-                customerName,
-                phoneNumber,
-                item,
-                itemName,
-                quantity,
-                weight,
-                entryDate,
-                row.id,
-                req.user.id
+            await client.query(
+              `UPDATE records
+               SET customer_name = $1, phone_number = $2, item = $3,
+                   item_name = $4, quantity = $5, weight = $6, entry_date = $7
+               WHERE id = $8 AND user_id = $9`,
+              [customerName, phoneNumber, item, itemName, quantity, weight, entryDate, row.id, req.user.id]
             );
 
         } else {
 
-            db.prepare(`
-                UPDATE records
-                SET
-                    customer_name = ?,
-                    phone_number = ?,
-                    item = ?,
-                    item_name = ?,
-                    amount = ?,
-                    quantity = ?,
-                    weight = ?,
-                    entry_date = ?,
-                    rate_of_interest = ?
-                WHERE id = ? AND user_id = ?
-            `).run(
-                customerName,
-                phoneNumber,
-                item,
-                itemName,
-                amount,
-                quantity,
-                weight,
-                entryDate,
-                rateOfInterest,
-                row.id,
-                req.user.id
+            await client.query(
+              `UPDATE records
+               SET customer_name = $1, phone_number = $2, item = $3,
+                   item_name = $4, amount = $5, quantity = $6, weight = $7,
+                   entry_date = $8, rate_of_interest = $9
+               WHERE id = $10 AND user_id = $11`,
+              [customerName, phoneNumber, item, itemName, amount, quantity, weight, entryDate, rateOfInterest, row.id, req.user.id]
             );
 
         }
 
-        const updated = db.prepare(
-          'SELECT * FROM records WHERE id = ? AND user_id = ?'
-        ).get(row.id, req.user.id);
+        const updatedResult = await client.query(
+          'SELECT * FROM records WHERE id = $1 AND user_id = $2',
+          [row.id, req.user.id]
+        );
 
-        return { status: 200, payload: { record: rowToRecord(updated) } };
-      });
-
-      const result = executeEdit();
-      res.status(result.status).json(result.payload);
+        await client.query('COMMIT');
+        res.status(200).json({ record: rowToRecord(updatedResult.rows[0]) });
+      } catch (err) {
+        await client.query('ROLLBACK');
+        throw err;
+      } finally {
+        client.release();
+      }
     } catch (err) {
       next(err);
     }
   }
 );
 
+
+// ============================================================
+// PUT /api/records/release
+// ============================================================
 
 app.put(
   '/api/records/release',
@@ -1791,41 +1522,36 @@ app.put(
     body('releaseDate').isString().isISO8601({ strict: false }).withMessage('Invalid release date.'),
   ],
 
-  (req, res, next) => {
+  async (req, res, next) => {
     try {
       if (validationErrors(req, res)) return;
 
-      const {
-        party,
-        packetNo,
-        releaseDate
-      } = req.body;
+      const { party, packetNo, releaseDate } = req.body;
 
-      const executeRelease = db.transaction(() => {
-        const row = db.prepare(
-          `SELECT *
-          FROM records
-          WHERE user_id = ?
-          AND party = ?
-          AND packet_no = ?`
-        ).get(
-          req.user.id,
-          party,
-          packetNo
+      const client = await pool.connect();
+      try {
+        await client.query('BEGIN');
+
+        const rowResult = await client.query(
+          `SELECT * FROM records
+           WHERE user_id = $1 AND party = $2 AND packet_no = $3`,
+          [req.user.id, party, packetNo]
         );
+        const row = rowResult.rows[0];
 
         if (!row) {
-          return { status: 404, payload: { error: 'Customer not found.' } };
+          await client.query('ROLLBACK');
+          return res.status(404).json({ error: 'Customer not found.' });
         }
 
-        const interestHistory = db.prepare(`
-            SELECT
-                interest_paid_till,
-                interest_amount
-            FROM interest_payments
-            WHERE record_id = ? AND user_id = ?
-            ORDER BY interest_paid_till
-        `).all(row.id, req.user.id);
+        const interestHistoryResult = await client.query(
+          `SELECT interest_paid_till, interest_amount
+           FROM interest_payments
+           WHERE record_id = $1 AND user_id = $2
+           ORDER BY interest_paid_till`,
+          [row.id, req.user.id]
+        );
+        const interestHistory = interestHistoryResult.rows;
 
         const interestAlreadyPaid = interestHistory.reduce(
           (sum, item) => sum + item.interest_amount,
@@ -1838,26 +1564,30 @@ app.put(
             : null;
 
         if (row.status === 'RELEASED') {
-          return { status: 400, payload: { error: 'Customer is already released.' } };
+          await client.query('ROLLBACK');
+          return res.status(400).json({ error: 'Customer is already released.' });
         }
 
         if (new Date(releaseDate) <= new Date(row.entry_date)) {
-          return { status: 400, payload: { error: 'Release Date must be after Entry Date.' } };
+          await client.query('ROLLBACK');
+          return res.status(400).json({ error: 'Release Date must be after Entry Date.' });
         }
 
-        const topUps = JSON.parse(row.top_ups || "[]");
+        const topUps = JSON.parse(row.top_ups || '[]');
         if (topUps.length > 0) {
             const lastTopUp = topUps[topUps.length - 1];
             if (new Date(releaseDate) <= new Date(lastTopUp.date)) {
-                return { status: 400, payload: { error: "Release Date must be after the latest Top-Up." } };
+                await client.query('ROLLBACK');
+                return res.status(400).json({ error: 'Release Date must be after the latest Top-Up.' });
             }
         }
 
-        const paidUps = JSON.parse(row.paid_ups || "[]");
+        const paidUps = JSON.parse(row.paid_ups || '[]');
         if (paidUps.length > 0) {
             const lastPaidUp = paidUps[paidUps.length - 1];
             if (new Date(releaseDate) <= new Date(lastPaidUp.date)) {
-                return { status: 400, payload: { error: "Release Date must be after the latest Paid-Up." } };
+                await client.query('ROLLBACK');
+                return res.status(400).json({ error: 'Release Date must be after the latest Paid-Up.' });
             }
         }
 
@@ -1865,7 +1595,8 @@ app.put(
             lastInterestPaidTill &&
             new Date(releaseDate) < new Date(lastInterestPaidTill)
         ) {
-            return { status: 400, payload: { error: "Release Date cannot be before the latest Interest Payment." } };
+            await client.query('ROLLBACK');
+            return res.status(400).json({ error: 'Release Date cannot be before the latest Interest Payment.' });
         }
 
         let interestStartDate;
@@ -1877,52 +1608,48 @@ app.put(
             interestStartDate = row.entry_date;
         }
 
-        const remainingInterest =
-          calculateInterestForPeriod(
-              rowToRecord(row),
-              interestStartDate,
-              releaseDate
-          );
-
-        const totalInterest =
-          interestAlreadyPaid +
-          remainingInterest;
-
-        db.prepare(`
-          UPDATE records
-          SET
-            release_date = ?,
-            status = 'RELEASED'
-          WHERE id = ? AND user_id = ?
-        `).run(
-          releaseDate,
-          row.id,
-          req.user.id
+        const remainingInterest = calculateInterestForPeriod(
+            rowToRecord(row),
+            interestStartDate,
+            releaseDate
         );
 
-        const updated = db.prepare(
-          'SELECT * FROM records WHERE id = ? AND user_id = ?'
-        ).get(row.id, req.user.id);
+        const totalInterest = interestAlreadyPaid + remainingInterest;
 
-        return {
-          status: 200,
-          payload: {
-            record: rowToRecord(updated),
-            totalInterest,
-            interestAlreadyPaid,
-            remainingInterest
-          }
-        };
-      });
+        await client.query(
+          `UPDATE records SET release_date = $1, status = 'RELEASED'
+           WHERE id = $2 AND user_id = $3`,
+          [releaseDate, row.id, req.user.id]
+        );
 
-      const result = executeRelease();
-      res.status(result.status).json(result.payload);
+        const updatedResult = await client.query(
+          'SELECT * FROM records WHERE id = $1 AND user_id = $2',
+          [row.id, req.user.id]
+        );
+
+        await client.query('COMMIT');
+        res.status(200).json({
+          record: rowToRecord(updatedResult.rows[0]),
+          totalInterest,
+          interestAlreadyPaid,
+          remainingInterest
+        });
+      } catch (err) {
+        await client.query('ROLLBACK');
+        throw err;
+      } finally {
+        client.release();
+      }
     } catch (err) {
       next(err);
     }
   }
 );
 
+
+// ============================================================
+// GET /api/interest-payment/search
+// ============================================================
 
 app.get(
   '/api/interest-payment/search',
@@ -1932,40 +1659,33 @@ app.get(
     query('packetNo').isInt({ min: 1, max: 1000000000 }).withMessage('Invalid packet number.')
   ],
 
-  (req, res, next) => {
+  async (req, res, next) => {
     try {
       if (validationErrors(req, res)) return;
 
       const { party, packetNo } = req.query;
 
-      const record = db.prepare(`
-        SELECT *
-        FROM records
-        WHERE user_id = ?
-        AND party = ?
-        AND packet_no = ?
-      `).get(
-        req.user.id,
-        party,
-        Number(packetNo)
+      const recordResult = await pool.query(
+        `SELECT * FROM records
+         WHERE user_id = $1 AND party = $2 AND packet_no = $3`,
+        [req.user.id, party, Number(packetNo)]
       );
 
+      const record = recordResult.rows[0];
+
       if (!record) {
-        return res.status(404).json({
-          error: 'Customer not found.'
-        });
+        return res.status(404).json({ error: 'Customer not found.' });
       }
 
-      const history = db.prepare(`
-        SELECT
-          interest_start_date,
-          interest_paid_till,
-          interest_amount,
-          payment_date
-        FROM interest_payments
-        WHERE record_id = ? AND user_id = ?
-        ORDER BY interest_paid_till
-      `).all(record.id, req.user.id);
+      const historyResult = await pool.query(
+        `SELECT interest_start_date, interest_paid_till, interest_amount, payment_date
+         FROM interest_payments
+         WHERE record_id = $1 AND user_id = $2
+         ORDER BY interest_paid_till`,
+        [record.id, req.user.id]
+      );
+
+      const history = historyResult.rows;
 
       const totalInterestPaid = history.reduce(
         (sum, item) => sum + item.interest_amount,
@@ -1990,6 +1710,10 @@ app.get(
 );
 
 
+// ============================================================
+// POST /api/interest-payment
+// ============================================================
+
 app.post(
   '/api/interest-payment',
 
@@ -1998,215 +1722,125 @@ app.post(
   requireCsrf,
 
   [
-
     body('recordId').isString().trim().notEmpty().withMessage('Invalid record ID.'),
-
     body('interestStartDate').isString().isISO8601({ strict: false }).withMessage('Invalid start date.'),
-
     body('interestPaidTill').isString().isISO8601({ strict: false }).withMessage('Invalid paid till date.')
-
   ],
 
-  (req, res, next) => {
+  async (req, res, next) => {
     try {
       if (validationErrors(req, res)) return;
 
-      const {
+      const { recordId, interestStartDate, interestPaidTill } = req.body;
 
-        recordId,
+      const client = await pool.connect();
+      try {
+        await client.query('BEGIN');
 
-        interestStartDate,
-
-        interestPaidTill
-
-      } = req.body;
-
-      const executeInterestPayment = db.transaction(() => {
-        const record = db.prepare(
-
-          `SELECT *
-           FROM records
-           WHERE id = ?
-           AND user_id = ?`
-
-        ).get(
-
-          recordId,
-
-          req.user.id
-
+        const recordResult = await client.query(
+          `SELECT * FROM records WHERE id = $1 AND user_id = $2`,
+          [recordId, req.user.id]
         );
+        const record = recordResult.rows[0];
 
         if (!record) {
-
-          return { status: 404, payload: { error: 'Customer not found.' } };
-
+          await client.query('ROLLBACK');
+          return res.status(404).json({ error: 'Customer not found.' });
         }
-
 
         if (record.status === 'RELEASED') {
-
-          return { status: 400, payload: { error: 'Interest payment cannot be added. Customer has already been released.' } };
-
+          await client.query('ROLLBACK');
+          return res.status(400).json({ error: 'Interest payment cannot be added. Customer has already been released.' });
         }
 
-
-        const lastPayment = db.prepare(`
-            SELECT
-                interest_start_date,
-                interest_paid_till
-            FROM interest_payments
-            WHERE record_id = ? AND user_id = ?
-            ORDER BY interest_paid_till DESC
-            LIMIT 1
-        `).get(recordId, req.user.id);
-
+        const lastPaymentResult = await client.query(
+          `SELECT interest_start_date, interest_paid_till
+           FROM interest_payments
+           WHERE record_id = $1 AND user_id = $2
+           ORDER BY interest_paid_till DESC
+           LIMIT 1`,
+          [recordId, req.user.id]
+        );
+        const lastPayment = lastPaymentResult.rows[0] || null;
 
         const numberOfDays =
-
           Math.floor(
-
-            (
-
-              new Date(interestPaidTill) -
-
-              new Date(interestStartDate)
-
-            ) / (1000 * 60 * 60 * 24)
-
+            (new Date(interestPaidTill) - new Date(interestStartDate))
+            / (1000 * 60 * 60 * 24)
           ) + 1;
 
         let expectedStartDate;
 
         if (lastPayment) {
-
             const nextDate = new Date(lastPayment.interest_paid_till);
-
             nextDate.setDate(nextDate.getDate() + 1);
-
-            expectedStartDate =
-                nextDate.toISOString().split('T')[0];
-
-        }
-        else {
-
-            expectedStartDate =
-                record.entry_date;
-
+            expectedStartDate = nextDate.toISOString().split('T')[0];
+        } else {
+            expectedStartDate = record.entry_date;
         }
 
         if (interestStartDate !== expectedStartDate) {
-
-            return { status: 400, payload: { error: `Interest Start Date must be ${expectedStartDate}.` } };
-
+          await client.query('ROLLBACK');
+          return res.status(400).json({ error: `Interest Start Date must be ${expectedStartDate}.` });
         }
 
         if (new Date(interestPaidTill) <= new Date(interestStartDate)) {
-
-          return { status: 400, payload: { error: 'Interest Paid Till date must be after Interest Start Date.' } };
-
+          await client.query('ROLLBACK');
+          return res.status(400).json({ error: 'Interest Paid Till date must be after Interest Start Date.' });
         }
 
-
-        const duplicate = db.prepare(`
-            SELECT id
-            FROM interest_payments
-            WHERE record_id = ?
-            AND interest_paid_till = ?
-            AND user_id = ?
-        `).get(
-          recordId,
-          interestPaidTill,
-          req.user.id
+        const duplicateResult = await client.query(
+          `SELECT id FROM interest_payments
+           WHERE record_id = $1 AND interest_paid_till = $2 AND user_id = $3`,
+          [recordId, interestPaidTill, req.user.id]
         );
 
-        if (duplicate) {
-
-          return { status: 409, payload: { error: 'Interest for this period has already been recorded.' } };
-
+        if (duplicateResult.rows.length > 0) {
+          await client.query('ROLLBACK');
+          return res.status(409).json({ error: 'Interest for this period has already been recorded.' });
         }
 
-        const calculatedInterest =
-          calculateInterestForPeriod(
-              rowToRecord(record),
-              interestStartDate,
-              interestPaidTill
-          );
+        const calculatedInterest = calculateInterestForPeriod(
+            rowToRecord(record),
+            interestStartDate,
+            interestPaidTill
+        );
 
         const id = crypto.randomUUID();
-
         const today = new Date().toISOString().split('T')[0];
-
         const createdAt = new Date().toISOString();
 
-        db.prepare(
-
-          `INSERT INTO interest_payments(
-
-            id,
-
-            user_id,
-
-            record_id,
-
-            interest_start_date,
-
-            interest_paid_till,
-
-            interest_amount,
-
-            payment_date,
-
-            created_at
-
-          )
-
-          VALUES(?,?,?,?,?,?,?,?)`
-
-        ).run(
-
-          id,
-
-          req.user.id,
-
-          recordId,
-
-          interestStartDate,
-
-          interestPaidTill,
-
-          calculatedInterest,
-
-          today,
-
-          createdAt
-
+        await client.query(
+          `INSERT INTO interest_payments (
+            id, user_id, record_id, interest_start_date,
+            interest_paid_till, interest_amount, payment_date, created_at
+          ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+          [id, req.user.id, recordId, interestStartDate, interestPaidTill, calculatedInterest, today, createdAt]
         );
 
-        return {
-          status: 200,
-          payload: {
-            message: 'Interest payment saved successfully.',
-
-            interestAmount: calculatedInterest,
-
-            numberOfDays,
-
-            interestStartDate,
-
-            interestPaidTill
-          }
-        };
-      });
-
-      const result = executeInterestPayment();
-      res.status(result.status).json(result.payload);
+        await client.query('COMMIT');
+        res.status(200).json({
+          message: 'Interest payment saved successfully.',
+          interestAmount: calculatedInterest,
+          numberOfDays,
+          interestStartDate,
+          interestPaidTill
+        });
+      } catch (err) {
+        await client.query('ROLLBACK');
+        throw err;
+      } finally {
+        client.release();
+      }
     } catch (err) {
       next(err);
     }
   }
-
 );
+
+// ============================================================
+// POST /api/records/release-preview
+// ============================================================
 
 app.post(
   '/api/records/release-preview',
@@ -2216,7 +1850,6 @@ app.post(
   requireCsrf,
 
   [
-
     body('party')
       .isString()
       .trim()
@@ -2226,102 +1859,58 @@ app.post(
     body('packetNo').isInt({ min: 1, max: 1000000000 }).withMessage('Invalid packet number.'),
 
     body('releaseDate').isString().isISO8601({ strict: false }).withMessage('Invalid release date.')
-
   ],
 
-  (req, res, next) => {
+  async (req, res, next) => {
     try {
 
       if (validationErrors(req, res)) return;
 
-      const {
+      const { party, packetNo, releaseDate } = req.body;
 
-        party,
-
-        packetNo,
-
-        releaseDate
-
-      } = req.body;
-
-      const row = db.prepare(
-
-        `SELECT *
-             FROM records
-             WHERE user_id = ?
-             AND party = ?
-             AND packet_no = ?`
-
-      ).get(
-
-        req.user.id,
-
-        party,
-
-        packetNo
-
+      const rowResult = await pool.query(
+        `SELECT * FROM records
+         WHERE user_id = $1 AND party = $2 AND packet_no = $3`,
+        [req.user.id, party, packetNo]
       );
 
+      const row = rowResult.rows[0];
+
       if (!row) {
-
-        return res.status(404).json({
-
-          error: 'Customer not found.'
-
-        });
-
+        return res.status(404).json({ error: 'Customer not found.' });
       }
 
-      const topUps = JSON.parse(row.top_ups || "[]");
+      const topUps = JSON.parse(row.top_ups || '[]');
 
       if (topUps.length > 0) {
-
           const lastTopUp = topUps[topUps.length - 1];
-
           if (new Date(releaseDate) <= new Date(lastTopUp.date)) {
-
-              return res.status(400).json({
-                  error: "Release Date must be after the latest Top-Up."
-              });
-
+              return res.status(400).json({ error: 'Release Date must be after the latest Top-Up.' });
           }
-
       }
 
-      const paidUps = JSON.parse(row.paid_ups || "[]");
+      const paidUps = JSON.parse(row.paid_ups || '[]');
 
       if (paidUps.length > 0) {
-
           const lastPaidUp = paidUps[paidUps.length - 1];
-
           if (new Date(releaseDate) <= new Date(lastPaidUp.date)) {
-
-              return res.status(400).json({
-                  error: "Release Date must be after the latest Paid-Up."
-              });
-
+              return res.status(400).json({ error: 'Release Date must be after the latest Paid-Up.' });
           }
-
       }
 
 
-      const interestHistory = db.prepare(
-
-        `SELECT
-                interest_paid_till,
-                interest_amount
-             FROM interest_payments
-             WHERE record_id = ? AND user_id = ?
-             ORDER BY interest_paid_till`
-
-      ).all(row.id, req.user.id);
+      const interestHistoryResult = await pool.query(
+        `SELECT interest_paid_till, interest_amount
+         FROM interest_payments
+         WHERE record_id = $1 AND user_id = $2
+         ORDER BY interest_paid_till`,
+        [row.id, req.user.id]
+      );
+      const interestHistory = interestHistoryResult.rows;
 
       const interestAlreadyPaid = interestHistory.reduce(
-
         (sum, item) => sum + item.interest_amount,
-
         0
-
       );
 
       const lastInterestPaidTill =
@@ -2333,9 +1922,7 @@ app.post(
           lastInterestPaidTill &&
           new Date(releaseDate) < new Date(lastInterestPaidTill)
       ) {
-          return res.status(400).json({
-              error: "Release Date cannot be before the latest Interest Payment."
-          });
+          return res.status(400).json({ error: 'Release Date cannot be before the latest Interest Payment.' });
       }
 
       let interestStartDate;
@@ -2348,26 +1935,16 @@ app.post(
           interestStartDate = row.entry_date;
       }
 
-
-      const remainingInterest =
-        calculateInterestForPeriod(
-            rowToRecord(row),
-            interestStartDate,
-            releaseDate
-        );
+      const remainingInterest = calculateInterestForPeriod(
+          rowToRecord(row),
+          interestStartDate,
+          releaseDate
+      );
 
       res.json({
-
-        totalInterest:
-
-          interestAlreadyPaid +
-
-          remainingInterest,
-
+        totalInterest: interestAlreadyPaid + remainingInterest,
         interestAlreadyPaid,
-
         remainingInterest
-
       });
 
     } catch (err) {
@@ -2379,72 +1956,74 @@ app.post(
 );
 
 
+// ============================================================
+// DELETE /api/customer
+// ============================================================
+
 app.delete(
-    "/api/customer",
+    '/api/customer',
 
     authenticate,
 
     requireCsrf,
 
     [
-        body("party").isString().trim().notEmpty().isLength({ max: 30 }).withMessage("Invalid party."),
-
-        body("packetNo").isInt({ min: 1, max: 1000000000 }).withMessage("Invalid packet number.")
+        body('party').isString().trim().notEmpty().isLength({ max: 30 }).withMessage('Invalid party.'),
+        body('packetNo').isInt({ min: 1, max: 1000000000 }).withMessage('Invalid packet number.')
     ],
 
-    (req, res, next) => {
+    async (req, res, next) => {
 
         try {
-            if (validationErrors(req, res))
-                return;
+            if (validationErrors(req, res)) return;
 
             const { party, packetNo } = req.body;
 
-            const row = db.prepare(`
-                SELECT id
-                FROM records
-                WHERE user_id = ?
-                  AND party = ?
-                  AND packet_no = ?
-            `).get(
-                req.user.id,
-                party,
-                packetNo
+            const rowResult = await pool.query(
+              `SELECT id FROM records
+               WHERE user_id = $1 AND party = $2 AND packet_no = $3`,
+              [req.user.id, party, packetNo]
             );
 
+            const row = rowResult.rows[0];
+
             if (!row) {
-
-                return res.status(404).json({
-                    error: "Customer not found."
-                });
-
+                return res.status(404).json({ error: 'Customer not found.' });
             }
 
-            const deleteCustomer = db.transaction((recordId, userId) => {
+            const client = await pool.connect();
+            try {
+              await client.query('BEGIN');
 
-                db.prepare(`
-                    DELETE FROM interest_payments
-                    WHERE record_id = ? AND user_id = ?
-                `).run(recordId, userId);
+              await client.query(
+                'DELETE FROM interest_payments WHERE record_id = $1 AND user_id = $2',
+                [row.id, req.user.id]
+              );
 
-                db.prepare(`
-                    DELETE FROM records
-                    WHERE id = ? AND user_id = ?
-                `).run(recordId, userId);
+              await client.query(
+                'DELETE FROM records WHERE id = $1 AND user_id = $2',
+                [row.id, req.user.id]
+              );
 
-            });
+              await client.query('COMMIT');
+            } catch (err) {
+              await client.query('ROLLBACK');
+              throw err;
+            } finally {
+              client.release();
+            }
 
-            deleteCustomer(row.id, req.user.id);
-
-            res.json({
-                message: "Customer deleted successfully."
-            });
+            res.json({ message: 'Customer deleted successfully.' });
         } catch (err) {
             next(err);
         }
 
     }
 );
+
+// ---------------------------------------------------------------------------
+// Static files & error handling (unchanged)
+// ---------------------------------------------------------------------------
 
 // Global Error Handling Middleware
 app.use((err, _req, res, _next) => {
@@ -2468,43 +2047,55 @@ app.use((_req, res) => {
 });
 
 
+// ---------------------------------------------------------------------------
+// Start server (after schema init)
+// ---------------------------------------------------------------------------
 
-const server = app.listen(PORT, () => {
-  console.log(`Manibhadra Jewellers running at http://localhost:${PORT}`);
-  if (!IS_PRODUCTION) {
-    console.log(`Open http://localhost:${PORT}/login.html in your browser.`);
-  }
-  createDatabaseBackup();
-});
+async function startServer() {
+  try {
+    await initSchema();
 
-server.on('error', (err) => {
-  if (err.code === 'EADDRINUSE') {
-    console.error(`\nERROR: Port ${PORT} is already in use.`);
-    console.error('Another copy of the server may still be running.');
-    console.error('Fix: close the other terminal, or run this in PowerShell:\n');
-    console.error(`  netstat -ano | findstr :${PORT}`);
-    console.error('  taskkill /PID <PID_NUMBER> /F\n');
-    console.error(`Or change PORT in your .env file (e.g. PORT=3001).\n`);
+    const server = app.listen(PORT, () => {
+      console.log(`Manibhadra Jewellers running at http://localhost:${PORT}`);
+      if (!IS_PRODUCTION) {
+        console.log(`Open http://localhost:${PORT}/login.html in your browser.`);
+      }
+    });
+
+    server.on('error', (err) => {
+      if (err.code === 'EADDRINUSE') {
+        console.error(`\nERROR: Port ${PORT} is already in use.`);
+        console.error('Another copy of the server may still be running.');
+        console.error('Fix: close the other terminal, or run this in PowerShell:\n');
+        console.error(`  netstat -ano | findstr :${PORT}`);
+        console.error('  taskkill /PID <PID_NUMBER> /F\n');
+        console.error(`Or change PORT in your .env file (e.g. PORT=3001).\n`);
+        process.exit(1);
+      }
+      throw err;
+    });
+
+    async function shutdown(signal) {
+      console.log(`${signal} received. Shutting down safely...`);
+      server.close(async () => {
+        try {
+          await pool.end();
+          console.log('Database pool closed. Server shutdown complete.');
+          process.exit(0);
+        } catch (err) {
+          console.error('Shutdown error:', err.message);
+          process.exit(1);
+        }
+      });
+    }
+
+    process.on('SIGINT', () => shutdown('SIGINT'));
+    process.on('SIGTERM', () => shutdown('SIGTERM'));
+
+  } catch (err) {
+    console.error('Failed to start server:', err);
     process.exit(1);
   }
-  throw err;
-});
-
-async function shutdown(signal) {
-  console.log(`${signal} received. Shutting down safely...`);
-
-  server.close(async () => {
-    try {
-      await createDatabaseBackup();
-      db.close();
-      console.log('Database closed. Server shutdown complete.');
-      process.exit(0);
-    } catch (err) {
-      console.error('Shutdown error:', err.message);
-      process.exit(1);
-    }
-  });
 }
 
-process.on('SIGINT', () => shutdown('SIGINT'));
-process.on('SIGTERM', () => shutdown('SIGTERM'));
+startServer();
