@@ -1,16 +1,46 @@
 
 (async () => {
     try {
-    await apiRequest('/api/auth/me');
-    window.location.href = '/index.html';
+        await apiRequest('/api/auth/me');
+        window.location.href = '/index.html';
     } catch {
-    // Not logged in
+        // Not logged in
     }
 })();
 
 const registerForm = document.getElementById('registerForm');
 const registerMessage = document.getElementById('registerMessage');
 const registerBtn = document.getElementById('registerBtn');
+
+
+const passwordInput = document.getElementById('password');
+const passwordToggle = document.getElementById('passwordToggle');
+
+const confirmPasswordInput = document.getElementById('confirmPassword');
+const confirmPasswordToggle = document.getElementById('confirmPasswordToggle');
+
+function setupPasswordToggle(input, toggle) {
+    toggle.addEventListener('click', () => {
+        const isHidden = input.type === 'password';
+
+        input.type = isHidden ? 'text' : 'password';
+
+        toggle.classList.toggle('showing', isHidden);
+
+        toggle.setAttribute(
+            'aria-label',
+            isHidden ? 'Hide password' : 'Show password'
+        );
+
+        toggle.setAttribute(
+            'title',
+            isHidden ? 'Hide password' : 'Show password'
+        );
+    });
+}
+
+setupPasswordToggle(passwordInput, passwordToggle);
+setupPasswordToggle(confirmPasswordInput, confirmPasswordToggle);
 
 registerForm.addEventListener('submit', async (e) => {
     e.preventDefault();
@@ -24,18 +54,18 @@ registerForm.addEventListener('submit', async (e) => {
     setSubmitLoading(registerBtn, true);
 
     try {
-    const data = await apiRequest('/api/auth/register', {
-        method: 'POST',
-        body: JSON.stringify({ username, email, password, confirmPassword }),
-    });
-    showAuthMessage(registerMessage, data.message, 'success');
-    registerForm.reset();
-    setTimeout(() => {
-        window.location.href = '/login.html';
-    }, 1500);
+        const data = await apiRequest('/api/auth/register', {
+            method: 'POST',
+            body: JSON.stringify({ username, email, password, confirmPassword }),
+        });
+        showAuthMessage(registerMessage, data.message, 'success');
+        registerForm.reset();
+        setTimeout(() => {
+            window.location.href = '/login.html';
+        }, 1500);
     } catch (err) {
-    showAuthMessage(registerMessage, err.message, 'error');
+        showAuthMessage(registerMessage, err.message, 'error');
     } finally {
-    setSubmitLoading(registerBtn, false);
+        setSubmitLoading(registerBtn, false);
     }
 });
