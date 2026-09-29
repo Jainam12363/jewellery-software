@@ -10,6 +10,7 @@ const { body, query, validationResult } = require('express-validator');
 const { Pool } = require('pg');
 const crypto = require('crypto');
 const path = require('path');
+const nodemailer = require('nodemailer');
 
 const PORT = Number(process.env.PORT) || 3000;
 const JWT_SECRET = process.env.JWT_SECRET;
@@ -31,6 +32,8 @@ const JWT_EXPIRY = '8h';
 const LOCKOUT_ATTEMPTS = 5;
 const LOCKOUT_DURATION_MS = 15 * 60 * 1000;
 const CSRF_TTL_MS = 8 * 60 * 60 * 1000;
+const RESET_TOKEN_TTL_MS = 30 * 60 * 1000;
+const APP_BASE_URL = process.env.APP_BASE_URL || 'http://localhost:3000';
 
 // ---------------------------------------------------------------------------
 // PostgreSQL Connection Pool
@@ -102,11 +105,79 @@ async function initSchema() {
         created_at TEXT NOT NULL,
         FOREIGN KEY (record_id) REFERENCES records(id)
       );
+
+      CREATE TABLE IF NOT EXISTS password_reset_tokens (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL,
+        token_hash TEXT NOT NULL,
+        expires_at TEXT NOT NULL,
+        used INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL
+      );
     `);
     console.log('PostgreSQL schema ready.');
   } finally {
     client.release();
   }
+}
+
+// ---------------------------------------------------------------------------
+// Email service
+// ---------------------------------------------------------------------------
+
+function createEmailTransporter() {
+  if (!process.env.SMTP_HOST || !process.env.SMTP_USER || !process.env.SMTP_PASS) {
+    return null;
+  }
+  return nodemailer.createTransport({
+    host: process.env.SMTP_HOST,
+    port: Number(process.env.SMTP_PORT) || 587,
+    secure: Number(process.env.SMTP_PORT) === 465,
+    auth: {
+      user: process.env.SMTP_USER,
+      pass: process.env.SMTP_PASS,
+    },
+  });
+}
+
+async function sendPasswordResetEmail(toEmail, rawToken) {
+  const transporter = createEmailTransporter();
+  if (!transporter) {
+    console.warn('EMAIL: SMTP not configured. Skipping password reset email send.');
+    return;
+  }
+  const resetLink = `${APP_BASE_URL}/reset-password.html?token=${rawToken}`;
+  const from = process.env.SMTP_FROM || process.env.SMTP_USER;
+  await transporter.sendMail({
+    from: `"Manibhadra Jewellers" <${from}>`,
+    to: toEmail,
+    subject: 'Reset your Manibhadra Jewellers password',
+    text: [
+      'Hello,',
+      '',
+      'A password reset was requested for your Manibhadra Jewellers account.',
+      '',
+      'Click the link below to reset your password. This link expires in 30 minutes and can only be used once:',
+      '',
+      resetLink,
+      '',
+      'If you did not request a password reset, you can safely ignore this email. Your password will not change.',
+      '',
+      '— Manibhadra Jewellers',
+    ].join('\n'),
+    html: `
+      <p>Hello,</p>
+      <p>A password reset was requested for your Manibhadra Jewellers account.</p>
+      <p>Click the button below to reset your password. This link expires in <strong>30 minutes</strong> and can only be used once.</p>
+      <p style="margin:24px 0">
+        <a href="${resetLink}" style="background:#4f46e5;color:#fff;padding:12px 24px;border-radius:6px;text-decoration:none;font-weight:600">Reset Password</a>
+      </p>
+      <p>Or copy this link into your browser:</p>
+      <p style="word-break:break-all;color:#555">${resetLink}</p>
+      <p>If you did not request a password reset, you can safely ignore this email. Your password will not change.</p>
+      <p>— Manibhadra Jewellers</p>
+    `,
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -532,6 +603,8 @@ const apiLimiter = rateLimit({
 
 app.use('/api/auth/login', authLimiter);
 app.use('/api/auth/register', authLimiter);
+app.use('/api/auth/forgot-password', authLimiter);
+app.use('/api/auth/reset-password', authLimiter);
 app.use('/api', apiLimiter);
 
 // ---------------------------------------------------------------------------
@@ -697,6 +770,143 @@ app.get('/api/auth/me', authenticate, (req, res) => {
     csrfToken,
   });
 });
+
+// ---------------------------------------------------------------------------
+// FORGOT PASSWORD
+// ---------------------------------------------------------------------------
+
+app.post(
+  '/api/auth/forgot-password',
+  [
+    body('email').isString().trim().isEmail().normalizeEmail().withMessage('Enter a valid email address.'),
+  ],
+  async (req, res, next) => {
+    const GENERIC_RESPONSE = { message: 'If an account exists for this email, a password reset link has been sent.' };
+    try {
+      if (validationErrors(req, res)) return;
+
+      const email = req.body.email;
+
+      const userResult = await pool.query('SELECT * FROM users WHERE LOWER(email) = LOWER($1)', [email]);
+      const user = userResult.rows[0] || null;
+
+      if (!user) {
+        // Do not reveal whether the account exists
+        return res.json(GENERIC_RESPONSE);
+      }
+
+      // Invalidate any previous unused tokens for this user
+      await pool.query(
+        `UPDATE password_reset_tokens SET used = 1 WHERE user_id = $1 AND used = 0`,
+        [user.id]
+      );
+
+      // Generate a cryptographically secure raw token
+      const rawToken = crypto.randomBytes(32).toString('hex');
+      const tokenHash = crypto.createHash('sha256').update(rawToken).digest('hex');
+      const tokenId = crypto.randomUUID();
+      const expiresAt = new Date(Date.now() + RESET_TOKEN_TTL_MS).toISOString();
+      const createdAt = new Date().toISOString();
+
+      await pool.query(
+        `INSERT INTO password_reset_tokens (id, user_id, token_hash, expires_at, used, created_at)
+         VALUES ($1, $2, $3, $4, 0, $5)`,
+        [tokenId, user.id, tokenHash, expiresAt, createdAt]
+      );
+
+      // Send email (non-blocking on send failure — still respond generically)
+      try {
+        await sendPasswordResetEmail(user.email, rawToken);
+      } catch (emailErr) {
+        console.error('EMAIL: Failed to send password reset email:', emailErr.message);
+      }
+
+      res.json(GENERIC_RESPONSE);
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+// ---------------------------------------------------------------------------
+// RESET PASSWORD
+// ---------------------------------------------------------------------------
+
+app.post(
+  '/api/auth/reset-password',
+  [
+    body('token').isString().trim().isLength({ min: 1, max: 128 }).withMessage('Invalid reset token.'),
+    body('password')
+      .isString()
+      .isLength({ min: 8, max: 128 })
+      .matches(PASSWORD_REGEX)
+      .withMessage('Password must be 8–128 characters with uppercase, lowercase, number, and special character.'),
+    body('confirmPassword').isString().custom((value, { req }) => {
+      if (value !== req.body.password) throw new Error('Passwords do not match.');
+      return true;
+    }),
+  ],
+  async (req, res, next) => {
+    const INVALID_TOKEN_MSG = 'This password reset link is invalid or has expired. Please request a new one.';
+    try {
+      if (validationErrors(req, res)) return;
+
+      const { token, password } = req.body;
+
+      // Hash the submitted token to compare against stored hash
+      const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
+
+      const tokenResult = await pool.query(
+        `SELECT * FROM password_reset_tokens WHERE token_hash = $1`,
+        [tokenHash]
+      );
+      const tokenRow = tokenResult.rows[0] || null;
+
+      if (!tokenRow) {
+        return res.status(400).json({ error: INVALID_TOKEN_MSG });
+      }
+
+      if (tokenRow.used) {
+        return res.status(400).json({ error: INVALID_TOKEN_MSG });
+      }
+
+      if (new Date(tokenRow.expires_at) <= new Date()) {
+        return res.status(400).json({ error: INVALID_TOKEN_MSG });
+      }
+
+      const user = await getUserById(tokenRow.user_id);
+      if (!user) {
+        return res.status(400).json({ error: INVALID_TOKEN_MSG });
+      }
+
+      // Hash new password with same bcrypt configuration as registration
+      const passwordHash = await bcrypt.hash(password, BCRYPT_ROUNDS);
+
+      // Update password and increment token_version to invalidate existing sessions
+      await pool.query(
+        `UPDATE users SET password_hash = $1, token_version = token_version + 1,
+         failed_login_attempts = 0, locked_until = NULL WHERE id = $2`,
+        [passwordHash, user.id]
+      );
+
+      // Mark reset token as used
+      await pool.query(
+        `UPDATE password_reset_tokens SET used = 1 WHERE id = $1`,
+        [tokenRow.id]
+      );
+
+      // Revoke CSRF tokens for existing sessions
+      revokeCsrfTokensForUser(user.id);
+
+      // Clear auth cookie in case user is currently logged in
+      clearAuthCookie(res);
+
+      res.json({ message: 'Password has been reset successfully. You can now log in with your new password.' });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
 
 
 // ============================================================
