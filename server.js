@@ -10,7 +10,6 @@ const { body, query, validationResult } = require('express-validator');
 const { Pool } = require('pg');
 const crypto = require('crypto');
 const path = require('path');
-const nodemailer = require('nodemailer');
 
 const PORT = Number(process.env.PORT) || 3000;
 const JWT_SECRET = process.env.JWT_SECRET;
@@ -122,50 +121,23 @@ async function initSchema() {
 }
 
 // ---------------------------------------------------------------------------
-// Email service
+// Email service — Brevo Transactional Email HTTPS API
 // ---------------------------------------------------------------------------
 
-function createEmailTransporter() {
-  if (!process.env.SMTP_HOST || !process.env.SMTP_USER || !process.env.SMTP_PASS) {
-    return null;
-  }
-  return nodemailer.createTransport({
-    host: process.env.SMTP_HOST,
-    port: Number(process.env.SMTP_PORT) || 587,
-    secure: Number(process.env.SMTP_PORT) === 465,
-    auth: {
-      user: process.env.SMTP_USER,
-      pass: process.env.SMTP_PASS,
-    },
-  });
-}
-
 async function sendPasswordResetEmail(toEmail, rawToken) {
-  const transporter = createEmailTransporter();
-  if (!transporter) {
-    console.warn('EMAIL: SMTP not configured. Skipping password reset email send.');
+  if (!process.env.BREVO_API_KEY) {
+    console.error('EMAIL: BREVO_API_KEY is not configured. Cannot send password reset email.');
     return;
   }
+
   const resetLink = `${APP_BASE_URL}/reset-password.html?token=${rawToken}`;
-  const from = process.env.SMTP_FROM || process.env.SMTP_USER;
-  await transporter.sendMail({
-    from: `"Manibhadra Jewellers" <${from}>`,
-    to: toEmail,
-    subject: 'Reset your Manibhadra Jewellers password',
-    text: [
-      'Hello,',
-      '',
-      'A password reset was requested for your Manibhadra Jewellers account.',
-      '',
-      'Click the link below to reset your password. This link expires in 30 minutes and can only be used once:',
-      '',
-      resetLink,
-      '',
-      'If you did not request a password reset, you can safely ignore this email. Your password will not change.',
-      '',
-      '— Manibhadra Jewellers',
-    ].join('\n'),
-    html: `
+  const senderEmail = process.env.SMTP_FROM;
+
+  const payload = {
+    sender:      { email: senderEmail },
+    to:          [{ email: toEmail }],
+    subject:     'Reset your Manibhadra Jewellers password',
+    htmlContent: `
       <p>Hello,</p>
       <p>A password reset was requested for your Manibhadra Jewellers account.</p>
       <p>Click the button below to reset your password. This link expires in <strong>30 minutes</strong> and can only be used once.</p>
@@ -177,7 +149,24 @@ async function sendPasswordResetEmail(toEmail, rawToken) {
       <p>If you did not request a password reset, you can safely ignore this email. Your password will not change.</p>
       <p>— Manibhadra Jewellers</p>
     `,
+  };
+
+  const response = await fetch('https://api.brevo.com/v3/smtp/email', {
+    method:  'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'api-key':      process.env.BREVO_API_KEY,
+    },
+    body: JSON.stringify(payload),
   });
+
+  if (!response.ok) {
+    const status = response.status;
+    let detail = '';
+    try { const j = await response.json(); detail = j.message || ''; } catch { /* ignore */ }
+    console.error(`EMAIL: Brevo API returned HTTP ${status}${detail ? ': ' + detail : ''}`);
+    throw new Error(`Brevo API error: HTTP ${status}`);
+  }
 }
 
 // ---------------------------------------------------------------------------
