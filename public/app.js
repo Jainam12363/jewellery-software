@@ -2,46 +2,46 @@ const customerForm = document.getElementById('customerForm');
 const topupForm = document.getElementById('topupForm');
 
 const paidupForm =
-    document.getElementById('paidupForm');
+  document.getElementById('paidupForm');
 const formMessage = document.getElementById('formMessage');
 const topupMessage = document.getElementById('topupMessage');
 
 const paidupMessage =
-    document.getElementById('paidupMessage');
+  document.getElementById('paidupMessage');
 
 const headerSearchInput =
-    document.getElementById("headerSearchInput");
+  document.getElementById("headerSearchInput");
 
 const headerSearchBtn =
-    document.getElementById("headerSearchBtn");
+  document.getElementById("headerSearchBtn");
 
 
 let recordsCache = [];
 let currentLedgerData = null;
 
 const deleteCustomerModal =
-    document.getElementById("deleteCustomerModal");
+  document.getElementById("deleteCustomerModal");
 
 const deleteCustomerName =
-    document.getElementById("deleteCustomerName");
+  document.getElementById("deleteCustomerName");
 
 const deletePacketNo =
-    document.getElementById("deletePacketNo");
+  document.getElementById("deletePacketNo");
 
 const deleteConfirmInput =
-    document.getElementById("deleteConfirmInput");
+  document.getElementById("deleteConfirmInput");
 
 const cancelDeleteBtn =
-    document.getElementById("cancelDeleteBtn");
+  document.getElementById("cancelDeleteBtn");
 
 const confirmDeleteBtn =
-    document.getElementById("confirmDeleteBtn");
+  document.getElementById("confirmDeleteBtn");
 
 const successToast =
-    document.getElementById("successToast");
+  document.getElementById("successToast");
 
 const errorToast =
-    document.getElementById("errorToast");
+  document.getElementById("errorToast");
 
 async function fetchRecords(filters = {}) {
   const params = new URLSearchParams();
@@ -57,22 +57,22 @@ async function fetchRecords(filters = {}) {
 
 async function fetchLedger(filters = {}) {
 
-    const params = new URLSearchParams();
+  const params = new URLSearchParams();
 
-    if (filters.party)
-        params.set('party', filters.party);
+  if (filters.party)
+    params.set('party', filters.party);
 
-    if (filters.packetNo)
-        params.set('packetNo', filters.packetNo);
+  if (filters.packetNo)
+    params.set('packetNo', filters.packetNo);
 
-    if (filters.name)
-        params.set('name', filters.name);
+  if (filters.name)
+    params.set('name', filters.name);
 
-    const query = params.toString();
+  const query = params.toString();
 
-    return await apiRequest(
-        `/api/ledger${query ? `?${query}` : ''}`
-    );
+  return await apiRequest(
+    `/api/ledger${query ? `?${query}` : ''}`
+  );
 
 }
 
@@ -95,13 +95,13 @@ function formatCurrency(amount) {
 
 function formatPdfCurrency(amount) {
 
-    return "Rs. " +
-        Number(amount).toLocaleString(
-            "en-IN",
-            {
-                maximumFractionDigits: 2
-            }
-        );
+  return "Rs. " +
+    Number(amount).toLocaleString(
+      "en-IN",
+      {
+        maximumFractionDigits: 2
+      }
+    );
 
 }
 
@@ -136,79 +136,79 @@ function calculateInterestAmount(
 
 function calculateInterestForPeriod(record, startDate, endDate) {
 
-    const roi = Number(record.rateOfInterest);
+  const roi = Number(record.rateOfInterest);
 
-    let principal = Number(record.amount);
+  let principal = Number(record.amount);
 
-    const transactions = [];
+  const transactions = [];
 
-    (record.topUps || []).forEach(topup => {
-        transactions.push({
-            type: 'TOPUP',
-            date: topup.date,
-            amount: Number(topup.amount)
-        });
+  (record.topUps || []).forEach(topup => {
+    transactions.push({
+      type: 'TOPUP',
+      date: topup.date,
+      amount: Number(topup.amount)
     });
+  });
 
-    (record.paidUps || []).forEach(paidup => {
-        transactions.push({
-            type: 'PAIDUP',
-            date: paidup.date,
-            amount: Number(paidup.amount)
-        });
+  (record.paidUps || []).forEach(paidup => {
+    transactions.push({
+      type: 'PAIDUP',
+      date: paidup.date,
+      amount: Number(paidup.amount)
     });
+  });
 
-    transactions.sort((a, b) => new Date(a.date) - new Date(b.date));
+  transactions.sort((a, b) => new Date(a.date) - new Date(b.date));
 
-    // Bring principal to the value on startDate
-    for (const tx of transactions) {
-        if (new Date(tx.date) < new Date(startDate)) {
-            if (tx.type === 'TOPUP')
-                principal += tx.amount;
-            else
-                principal -= tx.amount;
-        }
+  // Bring principal to the value on startDate
+  for (const tx of transactions) {
+    if (new Date(tx.date) < new Date(startDate)) {
+      if (tx.type === 'TOPUP')
+        principal += tx.amount;
+      else
+        principal -= tx.amount;
     }
+  }
 
-    let currentDate = startDate;
-    let totalInterest = 0;
+  let currentDate = startDate;
+  let totalInterest = 0;
 
-    for (const tx of transactions) {
+  for (const tx of transactions) {
 
-        if (
-            new Date(tx.date) < new Date(startDate) ||
-            new Date(tx.date) > new Date(endDate)
-        )
-            continue;
+    if (
+      new Date(tx.date) < new Date(startDate) ||
+      new Date(tx.date) > new Date(endDate)
+    )
+      continue;
 
-        const days =
-          Math.floor(
-              (new Date(tx.date) - new Date(currentDate))
-              / (1000 * 60 * 60 * 24)
-          ) + 1;
-
-        totalInterest +=
-            (principal * roi * days) / (100 * 30);
-
-        if (tx.type === 'TOPUP')
-            principal += tx.amount;
-        else
-            principal -= tx.amount;
-
-        currentDate = tx.date;
-    }
-
-    const remainingDays =
-        Math.floor(
-            (new Date(endDate) - new Date(currentDate))
-            / (1000 * 60 * 60 * 24)
-        ) + 1;
+    const days =
+      Math.floor(
+        (new Date(tx.date) - new Date(currentDate))
+        / (1000 * 60 * 60 * 24)
+      ) + 1;
 
     totalInterest +=
-        (principal * roi * remainingDays)
-        / (100 * 30);
+      (principal * roi * days) / (100 * 30);
 
-    return totalInterest;
+    if (tx.type === 'TOPUP')
+      principal += tx.amount;
+    else
+      principal -= tx.amount;
+
+    currentDate = tx.date;
+  }
+
+  const remainingDays =
+    Math.floor(
+      (new Date(endDate) - new Date(currentDate))
+      / (1000 * 60 * 60 * 24)
+    ) + 1;
+
+  totalInterest +=
+    (principal * roi * remainingDays)
+    / (100 * 30);
+
+  return totalInterest;
 }
 
 function showMessage(el, text, type) {
@@ -223,7 +223,7 @@ function showMessage(el, text, type) {
 
 function renderCustomerSummary(record) {
 
-    return `
+  return `
 
     <article class="ledger-customer-card">
 
@@ -321,11 +321,11 @@ function renderCustomerSummary(record) {
 
 function renderLoanSummary(summary) {
 
-    const currentPrincipal = summary.currentPrincipal;
+  const currentPrincipal = summary.currentPrincipal;
 
-    const interestPaid = summary.totalInterestPaid;
+  const interestPaid = summary.totalInterestPaid;
 
-    return `
+  return `
 
     <section class="ledger-summary">
 
@@ -369,38 +369,38 @@ function renderLoanSummary(summary) {
 
 function renderLedgerTimeline(timeline) {
 
-    if (!timeline || timeline.length === 0) {
+  if (!timeline || timeline.length === 0) {
 
-        return `
+    return `
             <p class="empty-state">
                 No transactions found.
             </p>
         `;
 
-    }
+  }
 
-    return `
+  return `
         <section class="ledger-timeline">
 
             ${timeline.map(event => {
 
-                let details = '';
+    let details = '';
 
-                switch (event.type) {
+    switch (event.type) {
 
-                    case 'ENTRY':
+      case 'ENTRY':
 
-                        details = `
+        details = `
                         <div>
                             <label>Principal</label>
                             <span>${formatCurrency(event.principal)}</span>
                         </div>
                         `;
-                        break;
+        break;
 
-                    case 'TOPUP':
+      case 'TOPUP':
 
-                        details = `
+        details = `
                         <div>
                             <label>Amount Added</label>
                             <span>${formatCurrency(event.amount)}</span>
@@ -411,11 +411,11 @@ function renderLedgerTimeline(timeline) {
                             <span>${formatCurrency(event.principalAfter)}</span>
                         </div>
                         `;
-                        break;
+        break;
 
-                    case 'PAIDUP':
+      case 'PAIDUP':
 
-                        details = `
+        details = `
                         <div>
                             <label>Amount Paid</label>
                             <span>${formatCurrency(event.amount)}</span>
@@ -426,11 +426,11 @@ function renderLedgerTimeline(timeline) {
                             <span>${formatCurrency(event.principalAfter)}</span>
                         </div>
                         `;
-                        break;
+        break;
 
-                    case 'INTEREST':
+      case 'INTEREST':
 
-                        details = `
+        details = `
                         <div>
                             <label>Interest Paid</label>
                             <span>${formatCurrency(event.amount)}</span>
@@ -441,11 +441,11 @@ function renderLedgerTimeline(timeline) {
                             <span>${formatDate(event.paidTill)}</span>
                         </div>
                         `;
-                        break;
+        break;
 
-                    case 'RELEASE':
+      case 'RELEASE':
 
-                        details = `
+        details = `
                         <div>
                             <label>Principal Paid</label>
                             <span>${formatCurrency(event.principalPaid)}</span>
@@ -461,11 +461,11 @@ function renderLedgerTimeline(timeline) {
                             <span>${formatCurrency(event.totalPaid)}</span>
                         </div>
                         `;
-                        break;
+        break;
 
-                }
+    }
 
-                return `
+    return `
 
                 <div class="ledger-event ${event.type.toLowerCase()}">
 
@@ -491,7 +491,7 @@ function renderLedgerTimeline(timeline) {
 
                 `;
 
-            }).join('')}
+  }).join('')}
 
         </section>
     `;
@@ -500,455 +500,455 @@ function renderLedgerTimeline(timeline) {
 
 function downloadLedgerPDF() {
 
-    if (!currentLedgerData) {
-        alert("No customer loaded.");
-        return;
+  if (!currentLedgerData) {
+    alert("No customer loaded.");
+    return;
+  }
+
+  const { jsPDF } = window.jspdf;
+
+  const pdf = new jsPDF({
+    orientation: "portrait",
+    unit: "mm",
+    format: "a4"
+  });
+
+  const record = currentLedgerData.record;
+  const summary = currentLedgerData.summary;
+  const timeline = currentLedgerData.timeline;
+
+  pdf.setFont("helvetica", "bold");
+  pdf.setFontSize(20);
+  pdf.text("MANIBHADRA JEWELLERS", 105, 18, {
+    align: "center"
+  });
+
+  pdf.setFontSize(14);
+  pdf.text("Customer Loan Ledger", 105, 27, {
+    align: "center"
+  });
+
+  pdf.setLineWidth(0.5);
+  pdf.line(15, 32, 195, 32);
+
+  let y = 38;
+
+  pdf.setFont("helvetica", "bold");
+  pdf.setFontSize(13);
+  pdf.text("Customer Information", 15, y);
+
+  y += 8;
+
+  pdf.setFont("helvetica", "normal");
+  pdf.setFontSize(11);
+
+  const leftX = 15;
+  const rightX = 110;
+
+  pdf.text(`Customer : ${record.customerName}`, leftX, y);
+  pdf.text(`Packet : ${record.packetNo}`, rightX, y);
+
+  y += 7;
+
+  pdf.text(`Party : ${record.party}`, leftX, y);
+  pdf.text(`Phone : ${record.phoneNumber}`, rightX, y);
+
+  y += 7;
+
+  pdf.text(`Item : ${record.item}`, leftX, y);
+  pdf.text(`Status : ${record.status}`, rightX, y);
+
+  y += 7;
+
+  pdf.text(`Item Name : ${record.itemName}`, leftX, y);
+  pdf.text(`ROI : ${record.rateOfInterest}%`, rightX, y);
+
+  y += 7;
+
+  pdf.text(`Weight : ${record.weight} gm`, leftX, y);
+  pdf.text(`Quantity : ${record.quantity}`, rightX, y);
+
+  y += 10;
+
+  pdf.setDrawColor(180);
+  pdf.line(15, y, 195, y);
+
+  y += 10;
+
+  pdf.setFont("helvetica", "bold");
+  pdf.setFontSize(13);
+  pdf.text("Loan Summary", 15, y);
+
+  y += 8;
+
+  pdf.setFont("courier", "normal");
+  pdf.setFontSize(11);
+
+  pdf.text(
+    `Original Loan Amount : ${formatPdfCurrency(record.amount)}`,
+    15,
+    y
+  );
+
+  y += 7;
+
+  pdf.text(
+    `Current Principal : ${formatPdfCurrency(summary.currentPrincipal)}`,
+    15,
+    y
+  );
+
+  y += 7;
+
+  pdf.text(
+    `Interest Paid : ${formatPdfCurrency(summary.totalInterestPaid)}`,
+    15,
+    y
+  );
+
+  y += 7;
+
+  pdf.text(
+    `Top-Ups : ${summary.topupCount}`,
+    15,
+    y
+  );
+
+  y += 7;
+
+  pdf.text(
+    `Paid-Ups : ${summary.paidupCount}`,
+    15,
+    y
+  );
+
+  y += 10;
+
+  pdf.setDrawColor(180);
+  pdf.line(15, y, 195, y);
+
+  y += 10;
+
+  pdf.setFont("helvetica", "bold");
+  pdf.setFontSize(13);
+  pdf.text("Transaction History", 15, y);
+
+  y += 6;
+
+  const tableRows = [];
+
+  timeline.forEach(event => {
+
+    let amount = "";
+    let principalAfter = "";
+
+    switch (event.type) {
+
+      case "ENTRY":
+        amount = formatPdfCurrency(event.principal);
+        principalAfter = formatPdfCurrency(event.principalAfter);
+        break;
+
+      case "TOPUP":
+        amount = formatPdfCurrency(event.amount);
+        principalAfter = formatPdfCurrency(event.principalAfter);
+        break;
+
+      case "PAIDUP":
+        amount = formatPdfCurrency(event.amount);
+        principalAfter = formatPdfCurrency(event.principalAfter);
+        break;
+
+      case "INTEREST":
+        amount = formatPdfCurrency(event.amount);
+        principalAfter = formatPdfCurrency(event.principalAfter);
+        break;
+
+      case "RELEASE":
+        amount = formatPdfCurrency(event.totalPaid);
+        principalAfter = "Released";
+        break;
     }
 
-    const { jsPDF } = window.jspdf;
+    tableRows.push([
+      formatDate(event.date),
+      event.title,
+      amount,
+      principalAfter
+    ]);
 
-    const pdf = new jsPDF({
-        orientation: "portrait",
-        unit: "mm",
-        format: "a4"
-    });
+  });
 
-    const record = currentLedgerData.record;
-    const summary = currentLedgerData.summary;
-    const timeline = currentLedgerData.timeline;
+  pdf.autoTable({
 
-    pdf.setFont("helvetica", "bold");
-    pdf.setFontSize(20);
-    pdf.text("MANIBHADRA JEWELLERS", 105, 18, {
-        align: "center"
-    });
+    startY: y + 4,
 
-    pdf.setFontSize(14);
-    pdf.text("Customer Loan Ledger", 105, 27, {
-        align: "center"
-    });
+    head: [[
+      "Date",
+      "Transaction",
+      "Amount",
+      "Principal After"
+    ]],
 
-    pdf.setLineWidth(0.5);
-    pdf.line(15, 32, 195, 32);
+    body: tableRows,
 
-    let y = 38;
+    theme: "striped",
 
-    pdf.setFont("helvetica", "bold");
-    pdf.setFontSize(13);
-    pdf.text("Customer Information", 15, y);
+    tableWidth: "auto",
 
-    y += 8;
+    headStyles: {
+      fillColor: [45, 45, 45],
+      textColor: 255,
+      fontStyle: "bold",
+      halign: "center"
+    },
 
-    pdf.setFont("helvetica", "normal");
-    pdf.setFontSize(11);
+    alternateRowStyles: {
+      fillColor: [245, 245, 245]
+    },
 
-    const leftX = 15;
-    const rightX = 110;
+    styles: {
 
-    pdf.text(`Customer : ${record.customerName}`, leftX, y);
-    pdf.text(`Packet : ${record.packetNo}`, rightX, y);
+      fontSize: 9,
 
-    y += 7;
+      cellPadding: 2.5,
 
-    pdf.text(`Party : ${record.party}`, leftX, y);
-    pdf.text(`Phone : ${record.phoneNumber}`, rightX, y);
+      overflow: "linebreak",
 
-    y += 7;
+      valign: "middle"
 
-    pdf.text(`Item : ${record.item}`, leftX, y);
-    pdf.text(`Status : ${record.status}`, rightX, y);
+    },
 
-    y += 7;
+    columnStyles: {
 
-    pdf.text(`Item Name : ${record.itemName}`, leftX, y);
-    pdf.text(`ROI : ${record.rateOfInterest}%`, rightX, y);
+      0: {
+        cellWidth: 35,
+        halign: "center"
+      },
 
-    y += 7;
+      1: {
+        cellWidth: 55,
+        halign: "center"
+      },
 
-    pdf.text(`Weight : ${record.weight} gm`, leftX, y);
-    pdf.text(`Quantity : ${record.quantity}`, rightX, y);
+      2: {
+        cellWidth: 45,
+        halign: "right"
+      },
 
-    y += 10;
+      3: {
+        cellWidth: 45,
+        halign: "right"
+      }
 
-    pdf.setDrawColor(180);
-    pdf.line(15, y, 195, y);
+    },
 
-    y += 10;
+  });
 
-    pdf.setFont("helvetica", "bold");
-    pdf.setFontSize(13);
-    pdf.text("Loan Summary", 15, y);
+  y = pdf.lastAutoTable.finalY + 10;
 
-    y += 8;
+  pdf.setFont("helvetica", "italic");
+  pdf.setFontSize(9);
 
-    pdf.setFont("courier", "normal");
-    pdf.setFontSize(11);
+  pdf.text(
+    `Generated on: ${new Date().toLocaleString("en-IN")}`,
+    15,
+    287
+  );
 
-    pdf.text(
-        `Original Loan Amount : ${formatPdfCurrency(record.amount)}`,
-        15,
-        y
-    );
-
-    y += 7;
-
-    pdf.text(
-        `Current Principal : ${formatPdfCurrency(summary.currentPrincipal)}`,
-        15,
-        y
-    );
-
-    y += 7;
-
-    pdf.text(
-        `Interest Paid : ${formatPdfCurrency(summary.totalInterestPaid)}`,
-        15,
-        y
-    );
-
-    y += 7;
-
-    pdf.text(
-        `Top-Ups : ${summary.topupCount}`,
-        15,
-        y
-    );
-
-    y += 7;
-
-    pdf.text(
-        `Paid-Ups : ${summary.paidupCount}`,
-        15,
-        y
-    );
-
-    y += 10;
-
-    pdf.setDrawColor(180);
-    pdf.line(15, y, 195, y);
-
-    y += 10;
-
-    pdf.setFont("helvetica", "bold");
-    pdf.setFontSize(13);
-    pdf.text("Transaction History", 15, y);
-
-    y += 6;
-
-    const tableRows = [];
-
-    timeline.forEach(event => {
-
-        let amount = "";
-        let principalAfter = "";
-
-        switch (event.type) {
-
-            case "ENTRY":
-                amount = formatPdfCurrency(event.principal);
-                principalAfter = formatPdfCurrency(event.principalAfter);
-                break;
-
-            case "TOPUP":
-                amount = formatPdfCurrency(event.amount);
-                principalAfter = formatPdfCurrency(event.principalAfter);
-                break;
-
-            case "PAIDUP":
-                amount = formatPdfCurrency(event.amount);
-                principalAfter = formatPdfCurrency(event.principalAfter);
-                break;
-
-            case "INTEREST":
-                amount = formatPdfCurrency(event.amount);
-                principalAfter = formatPdfCurrency(event.principalAfter);
-                break;
-
-            case "RELEASE":
-                amount = formatPdfCurrency(event.totalPaid);
-                principalAfter = "Released";
-                break;
-        }
-
-        tableRows.push([
-            formatDate(event.date),
-            event.title,
-            amount,
-            principalAfter
-        ]);
-
-    });
-
-    pdf.autoTable({
-
-        startY: y + 4,
-
-        head: [[
-            "Date",
-            "Transaction",
-            "Amount",
-            "Principal After"
-        ]],
-
-        body: tableRows,
-
-        theme: "striped",
-
-        tableWidth: "auto",
-
-        headStyles: {
-            fillColor: [45, 45, 45],
-            textColor: 255,
-            fontStyle: "bold",
-            halign: "center"
-        },
-
-        alternateRowStyles: {
-            fillColor: [245, 245, 245]
-        },
-
-        styles: {
-
-            fontSize: 9,
-
-            cellPadding: 2.5,
-
-            overflow: "linebreak",
-
-            valign: "middle"
-
-        },
-
-        columnStyles: {
-
-            0: {
-                cellWidth: 35,
-                halign: "center"
-            },
-
-            1: {
-                cellWidth: 55,
-                halign: "center"
-            },
-
-            2: {
-                cellWidth: 45,
-                halign: "right"
-            },
-
-            3: {
-                cellWidth: 45,
-                halign: "right"
-            }
-
-        },
-
-    });
-
-    y = pdf.lastAutoTable.finalY + 10;
-
-    pdf.setFont("helvetica", "italic");
-    pdf.setFontSize(9);
-
-    pdf.text(
-        `Generated on: ${new Date().toLocaleString("en-IN")}`,
-        15,
-        287
-    );
-
-    pdf.save(`Packet_${record.packetNo}.pdf`);
+  pdf.save(`Packet_${record.packetNo}.pdf`);
 
 }
 
 function openDeleteModal(record) {
 
-    deleteCustomerName.textContent =
-        record.customerName;
+  deleteCustomerName.textContent =
+    record.customerName;
 
-    deletePacketNo.textContent =
-        record.packetNo;
+  deletePacketNo.textContent =
+    record.packetNo;
 
-    deleteConfirmInput.value = "";
+  deleteConfirmInput.value = "";
 
-    confirmDeleteBtn.disabled = true;
+  confirmDeleteBtn.disabled = true;
 
-    deleteCustomerModal.classList.remove("hidden");
+  deleteCustomerModal.classList.remove("hidden");
 
-    deleteConfirmInput.focus();
+  deleteConfirmInput.focus();
 }
 
 
 function closeDeleteModal() {
 
-    deleteCustomerModal.classList.add("hidden");
+  deleteCustomerModal.classList.add("hidden");
 
-    deleteConfirmInput.value = "";
+  deleteConfirmInput.value = "";
 
-    deleteConfirmInput.blur();
+  deleteConfirmInput.blur();
 
-    confirmDeleteBtn.disabled = true;
+  confirmDeleteBtn.disabled = true;
 
-    confirmDeleteBtn.textContent = "Delete Customer";
+  confirmDeleteBtn.textContent = "Delete Customer";
 
 }
 
 
 function showSuccessToast(message) {
 
-    successToast.textContent = message;
+  successToast.textContent = message;
 
-    successToast.classList.add("show");
+  successToast.classList.add("show");
 
-    setTimeout(() => {
+  setTimeout(() => {
 
-        successToast.classList.remove("show");
+    successToast.classList.remove("show");
 
-    }, 3000);
+  }, 3000);
 }
 
 function showErrorToast(message) {
 
-    errorToast.textContent = message;
+  errorToast.textContent = message;
 
-    errorToast.classList.add("show");
+  errorToast.classList.add("show");
 
-    setTimeout(() => {
+  setTimeout(() => {
 
-        errorToast.classList.remove("show");
+    errorToast.classList.remove("show");
 
-    }, 3000);
+  }, 3000);
 
 }
 
 
 function validateDeleteInput() {
 
-    if (!currentLedgerData)
-        return;
+  if (!currentLedgerData)
+    return;
 
-    const expected =
-        String(currentLedgerData.record.packetNo);
+  const expected =
+    String(currentLedgerData.record.packetNo);
 
-    const entered =
-        deleteConfirmInput.value.trim();
+  const entered =
+    deleteConfirmInput.value.trim();
 
-    confirmDeleteBtn.disabled =
-        entered !== expected;
+  confirmDeleteBtn.disabled =
+    entered !== expected;
 }
 
 
 async function confirmDeleteCustomer() {
 
-    if (!currentLedgerData)
-        return;
-
-    const record = currentLedgerData.record;
-
-    openDeleteModal(record);
-
+  if (!currentLedgerData)
     return;
 
-    try {
+  const record = currentLedgerData.record;
 
-        const response = await fetch("/api/customer", {
-            method: "DELETE",
-            credentials: "include",
-            headers: {
-                "Content-Type": "application/json",
-                "X-CSRF-Token": csrfToken
-            },
-            body: JSON.stringify({
-                party: record.party,
-                packetNo: record.packetNo
-            })
-        });
+  openDeleteModal(record);
 
-        const data = await response.json();
+  return;
 
-        if (!response.ok) {
-            throw new Error(data.error || "Failed to delete customer.");
-        }
+  try {
 
-        alert("Customer deleted successfully.");
+    const response = await fetch("/api/customer", {
+      method: "DELETE",
+      credentials: "include",
+      headers: {
+        "Content-Type": "application/json",
+        "X-CSRF-Token": csrfToken
+      },
+      body: JSON.stringify({
+        party: record.party,
+        packetNo: record.packetNo
+      })
+    });
 
-        currentLedgerData = null;
+    const data = await response.json();
 
-        document.getElementById("searchResults").innerHTML = `
+    if (!response.ok) {
+      throw new Error(data.error || "Failed to delete customer.");
+    }
+
+    alert("Customer deleted successfully.");
+
+    currentLedgerData = null;
+
+    document.getElementById("searchResults").innerHTML = `
             <p class="empty-state">
                 Search a customer to view the complete ledger.
             </p>
         `;
 
-    }
-    catch (err) {
+  }
+  catch (err) {
 
-        alert(err.message);
+    alert(err.message);
 
-    }
+  }
 
 }
 
 async function deleteCustomer() {
 
-    if (!currentLedgerData)
-        return;
+  if (!currentLedgerData)
+    return;
 
-    const record = currentLedgerData.record;
+  const record = currentLedgerData.record;
 
-    confirmDeleteBtn.disabled = true;
+  confirmDeleteBtn.disabled = true;
 
-    confirmDeleteBtn.textContent = "Deleting...";
+  confirmDeleteBtn.textContent = "Deleting...";
 
-    try {
+  try {
 
-        const response = await fetch("/api/customer", {
+    const response = await fetch("/api/customer", {
 
-            method: "DELETE",
+      method: "DELETE",
 
-            credentials: "include",
+      credentials: "include",
 
-            headers: {
+      headers: {
 
-                "Content-Type": "application/json",
+        "Content-Type": "application/json",
 
-                "X-CSRF-Token": csrfToken
+        "X-CSRF-Token": csrfToken
 
-            },
+      },
 
-            body: JSON.stringify({
+      body: JSON.stringify({
 
-                party: record.party,
+        party: record.party,
 
-                packetNo: record.packetNo
+        packetNo: record.packetNo
 
-            })
+      })
 
-        });
+    });
 
-        const data = await response.json();
+    const data = await response.json();
 
-        if (!response.ok) {
+    if (!response.ok) {
 
-            throw new Error(
-                data.error || "Failed to delete customer."
-            );
+      throw new Error(
+        data.error || "Failed to delete customer."
+      );
 
-        }
+    }
 
 
-        confirmDeleteBtn.textContent = "Delete Customer";
+    confirmDeleteBtn.textContent = "Delete Customer";
 
-        confirmDeleteBtn.disabled = false;
+    confirmDeleteBtn.disabled = false;
 
-        closeDeleteModal();
+    closeDeleteModal();
 
-        showSuccessToast(
-            "✔ Customer deleted successfully."
-        );
+    showSuccessToast(
+      "✔ Customer deleted successfully."
+    );
 
-        currentLedgerData = null;
+    currentLedgerData = null;
 
-        document.getElementById("searchResults").innerHTML = `
+    document.getElementById("searchResults").innerHTML = `
 
             <p class="empty-state">
 
@@ -958,69 +958,69 @@ async function deleteCustomer() {
 
         `;
 
-    }
+  }
 
-    catch (err) {
+  catch (err) {
 
-        confirmDeleteBtn.textContent = "Delete Customer";
+    confirmDeleteBtn.textContent = "Delete Customer";
 
-        validateDeleteInput();
+    validateDeleteInput();
 
-        closeDeleteModal();
+    closeDeleteModal();
 
-        showErrorToast(err.message);
+    showErrorToast(err.message);
 
-    }
+  }
 
 }
 
 async function loadLedger(packetNo, party) {
 
-    const data = await fetchLedger({
-        packetNo,
-        party
-    });
+  const data = await fetchLedger({
+    packetNo,
+    party
+  });
 
-    currentLedgerData = data;
+  currentLedgerData = data;
 
-    if (!data.record)
-        return;
+  if (!data.record)
+    return;
 
-    document.getElementById('searchResults').innerHTML =
+  document.getElementById('searchResults').innerHTML =
 
-        renderCustomerSummary(data.record)
+    renderCustomerSummary(data.record)
 
-        +
+    +
 
-        renderLoanSummary(data.summary)
+    renderLoanSummary(data.summary)
 
-        +
+    +
 
-        renderLedgerTimeline(data.timeline);
+    renderLedgerTimeline(data.timeline);
 
-    document
-        .getElementById("downloadPdfBtn")
-        ?.addEventListener("click", downloadLedgerPDF);
+  document
+    .getElementById("downloadPdfBtn")
+    ?.addEventListener("click", downloadLedgerPDF);
 
-    document
-        .getElementById("deleteCustomerBtn")
-        ?.addEventListener("click", confirmDeleteCustomer);
+  document
+    .getElementById("deleteCustomerBtn")
+    ?.addEventListener("click", confirmDeleteCustomer);
 
 }
 
 function renderLedgerSearchResults(records) {
 
-    if (records.length === 0) {
+  if (records.length === 0) {
 
-        return `
+    return `
             <p class="empty-state">
                 No customers found.
             </p>
         `;
 
-    }
+  }
 
-    return records.map(record => `
+  return records.map(record => `
 
         <div class="record-card ledger-search-card"
              data-packet="${record.packetNo}"
@@ -1084,7 +1084,7 @@ function renderInterestHistory(history) {
     `;
 
     return;
-}
+  }
 
   container.innerHTML = `
 
@@ -1134,19 +1134,19 @@ function renderInterestHistory(history) {
 
 function renderTopupHistory(record) {
 
-    const container =
-        document.getElementById('topupHistory');
+  const container =
+    document.getElementById('topupHistory');
 
-    if (!record.topUps || record.topUps.length === 0) {
+  if (!record.topUps || record.topUps.length === 0) {
 
-        container.innerHTML =
-            '<p class="empty-state">No Top-Up history.</p>';
+    container.innerHTML =
+      '<p class="empty-state">No Top-Up history.</p>';
 
-        return;
+    return;
 
-    }
+  }
 
-    let html = `
+  let html = `
         <table class="history-table">
             <thead>
                 <tr>
@@ -1157,23 +1157,23 @@ function renderTopupHistory(record) {
             <tbody>
     `;
 
-    record.topUps.forEach(item => {
+  record.topUps.forEach(item => {
 
-        html += `
+    html += `
             <tr>
                 <td>${formatDate(item.date)}</td>
                 <td>${formatCurrency(item.amount)}</td>
             </tr>
         `;
 
-    });
+  });
 
-    html += `
+  html += `
             </tbody>
         </table>
     `;
 
-    container.innerHTML = html;
+  container.innerHTML = html;
 
 }
 
@@ -1181,19 +1181,19 @@ function renderTopupHistory(record) {
 
 function renderPaidupHistory(record) {
 
-    const container =
-        document.getElementById('paidupHistory');
+  const container =
+    document.getElementById('paidupHistory');
 
-    if (!record.paidUps || record.paidUps.length === 0) {
+  if (!record.paidUps || record.paidUps.length === 0) {
 
-        container.innerHTML =
-            '<p class="empty-state">No Paid-Up history.</p>';
+    container.innerHTML =
+      '<p class="empty-state">No Paid-Up history.</p>';
 
-        return;
+    return;
 
-    }
+  }
 
-    let html = `
+  let html = `
         <table class="history-table">
             <thead>
                 <tr>
@@ -1204,176 +1204,176 @@ function renderPaidupHistory(record) {
             <tbody>
     `;
 
-    record.paidUps.forEach(item => {
+  record.paidUps.forEach(item => {
 
-        html += `
+    html += `
             <tr>
                 <td>${formatDate(item.date)}</td>
                 <td>${formatCurrency(item.amount)}</td>
             </tr>
         `;
 
-    });
+  });
 
-    html += `
+  html += `
             </tbody>
         </table>
     `;
 
-    container.innerHTML = html;
+  container.innerHTML = html;
 
 }
 
 
 function getCurrentPrincipal(record) {
 
-    const timeline = buildTransactionTimeline(record);
+  const timeline = buildTransactionTimeline(record);
 
-    let principal = 0;
+  let principal = 0;
 
-    timeline.forEach(transaction => {
+  timeline.forEach(transaction => {
 
-        switch (transaction.type) {
+    switch (transaction.type) {
 
-            case 'ENTRY':
-                principal = transaction.amount;
-                break;
+      case 'ENTRY':
+        principal = transaction.amount;
+        break;
 
-            case 'TOPUP':
-                principal += transaction.amount;
-                break;
+      case 'TOPUP':
+        principal += transaction.amount;
+        break;
 
-            case 'PAIDUP':
-                principal -= transaction.amount;
-                break;
+      case 'PAIDUP':
+        principal -= transaction.amount;
+        break;
 
-        }
+    }
 
-    });
+  });
 
-    return principal;
+  return principal;
 
 }
 
 function buildTransactionTimeline(record) {
 
-    const timeline = [];
+  const timeline = [];
 
-    // Original Loan Entry
+  // Original Loan Entry
+  timeline.push({
+    type: 'ENTRY',
+    date: record.entryDate,
+    amount: Number(record.amount)
+  });
+
+  // Interest Payments
+  if (record.interestPayments) {
+
+    record.interestPayments.forEach(payment => {
+
+      timeline.push({
+        type: 'INTEREST_PAYMENT',
+        date: payment.date,
+        amount: Number(payment.amount),
+        interestPaidTill: payment.interestPaidTill
+      });
+
+    });
+
+  }
+
+  // Top-Ups
+  if (record.topUps) {
+
+    record.topUps.forEach(topup => {
+
+      timeline.push({
+        type: 'TOPUP',
+        date: topup.date,
+        amount: Number(topup.amount)
+      });
+
+    });
+
+  }
+
+  // Paid-Ups
+  if (record.paidUps) {
+
+    record.paidUps.forEach(paidup => {
+
+      timeline.push({
+        type: 'PAIDUP',
+        date: paidup.date,
+        amount: Number(paidup.amount)
+      });
+
+    });
+
+  }
+
+  // Release
+  if (record.releaseDate) {
+
     timeline.push({
-        type: 'ENTRY',
-        date: record.entryDate,
-        amount: Number(record.amount)
+      type: 'RELEASE',
+      date: record.releaseDate
     });
 
-    // Interest Payments
-    if (record.interestPayments) {
+  }
 
-        record.interestPayments.forEach(payment => {
+  timeline.sort((a, b) => {
 
-            timeline.push({
-                type: 'INTEREST_PAYMENT',
-                date: payment.date,
-                amount: Number(payment.amount),
-                interestPaidTill: payment.interestPaidTill
-            });
+    const dateDiff =
+      new Date(a.date) - new Date(b.date);
 
-        });
+    if (dateDiff !== 0)
+      return dateDiff;
 
-    }
+    const order = {
+      ENTRY: 1,
+      INTEREST_PAYMENT: 2,
+      TOPUP: 3,
+      PAIDUP: 4,
+      RELEASE: 5
+    };
 
-    // Top-Ups
-    if (record.topUps) {
+    return order[a.type] - order[b.type];
 
-        record.topUps.forEach(topup => {
+  });
 
-            timeline.push({
-                type: 'TOPUP',
-                date: topup.date,
-                amount: Number(topup.amount)
-            });
-
-        });
-
-    }
-
-    // Paid-Ups
-    if (record.paidUps) {
-
-        record.paidUps.forEach(paidup => {
-
-            timeline.push({
-                type: 'PAIDUP',
-                date: paidup.date,
-                amount: Number(paidup.amount)
-            });
-
-        });
-
-    }
-
-    // Release
-    if (record.releaseDate) {
-
-        timeline.push({
-            type: 'RELEASE',
-            date: record.releaseDate
-        });
-
-    }
-
-    timeline.sort((a, b) => {
-
-        const dateDiff =
-            new Date(a.date) - new Date(b.date);
-
-        if (dateDiff !== 0)
-            return dateDiff;
-
-        const order = {
-            ENTRY: 1,
-            INTEREST_PAYMENT: 2,
-            TOPUP: 3,
-            PAIDUP: 4,
-            RELEASE: 5
-        };
-
-        return order[a.type] - order[b.type];
-
-    });
-
-    return timeline;
+  return timeline;
 
 }
 
 function setupEventListeners() {
 
   deleteConfirmInput.addEventListener(
-      "input",
-      validateDeleteInput
+    "input",
+    validateDeleteInput
   );
 
   cancelDeleteBtn.addEventListener(
-      "click",
-      closeDeleteModal
+    "click",
+    closeDeleteModal
   );
 
   confirmDeleteBtn.addEventListener(
-      "click",
-      deleteCustomer
+    "click",
+    deleteCustomer
   );
 
   deleteCustomerModal.addEventListener(
-      "click",
-      (e) => {
+    "click",
+    (e) => {
 
-          if (e.target === deleteCustomerModal) {
+      if (e.target === deleteCustomerModal) {
 
-              closeDeleteModal();
-
-          }
+        closeDeleteModal();
 
       }
+
+    }
   );
 
   customerForm.addEventListener('submit', async (e) => {
@@ -1409,115 +1409,115 @@ function setupEventListeners() {
 
   async function performHeaderSearch() {
 
-      const query = headerSearchInput.value.trim();
+    const query = headerSearchInput.value.trim();
 
-      if (!query)
-          return;
+    if (!query)
+      return;
 
-      // Open Ledger page automatically
-      openTab("search");
+    // Open Ledger page automatically
+    openTab("search");
 
-      const resultsEl =
-          document.getElementById("searchResults");
+    const resultsEl =
+      document.getElementById("searchResults");
 
-      try {
+    try {
 
-          const filters = {
-              party: document.getElementById("partySelect").value
-          };
+      const filters = {
+        party: document.getElementById("partySelect").value
+      };
 
-          if (/^\d+$/.test(query)) {
+      if (/^\d+$/.test(query)) {
 
-              filters.packetNo = query;
+        filters.packetNo = query;
 
-              const data = await fetchLedger(filters);
+        const data = await fetchLedger(filters);
 
-              if (!data.record) {
-
-                  resultsEl.innerHTML =
-                      '<p class="empty-state">No record found matching your search.</p>';
-
-                  return;
-
-              }
-
-              currentLedgerData = data;
-
-              resultsEl.innerHTML =
-                  renderCustomerSummary(data.record) +
-                  renderLoanSummary(data.summary) +
-                  renderLedgerTimeline(data.timeline);
-
-              document
-                  .getElementById("downloadPdfBtn")
-                  ?.addEventListener("click", downloadLedgerPDF);
-
-              document
-                  .getElementById("deleteCustomerBtn")
-                  ?.addEventListener("click", confirmDeleteCustomer);
-
-          } else {
-
-              filters.name = query;
-
-              const data = await fetchLedger(filters);
-
-              resultsEl.innerHTML =
-                  renderLedgerSearchResults(data.records);
-
-              document
-                  .querySelectorAll(".ledger-search-card")
-                  .forEach(card => {
-
-                      card.addEventListener("click", () => {
-
-                          loadLedger(
-                              card.dataset.packet,
-                              card.dataset.party
-                          );
-
-                      });
-
-                  });
-
-          }
-
-      } catch (err) {
+        if (!data.record) {
 
           resultsEl.innerHTML =
-              `<p class="empty-state">${err.message}</p>`;
+            '<p class="empty-state">No record found matching your search.</p>';
+
+          return;
+
+        }
+
+        currentLedgerData = data;
+
+        resultsEl.innerHTML =
+          renderCustomerSummary(data.record) +
+          renderLoanSummary(data.summary) +
+          renderLedgerTimeline(data.timeline);
+
+        document
+          .getElementById("downloadPdfBtn")
+          ?.addEventListener("click", downloadLedgerPDF);
+
+        document
+          .getElementById("deleteCustomerBtn")
+          ?.addEventListener("click", confirmDeleteCustomer);
+
+      } else {
+
+        filters.name = query;
+
+        const data = await fetchLedger(filters);
+
+        resultsEl.innerHTML =
+          renderLedgerSearchResults(data.records);
+
+        document
+          .querySelectorAll(".ledger-search-card")
+          .forEach(card => {
+
+            card.addEventListener("click", () => {
+
+              loadLedger(
+                card.dataset.packet,
+                card.dataset.party
+              );
+
+            });
+
+          });
 
       }
+
+    } catch (err) {
+
+      resultsEl.innerHTML =
+        `<p class="empty-state">${err.message}</p>`;
+
+    }
 
   }
 
   headerSearchBtn.addEventListener(
-      "click",
-      performHeaderSearch
+    "click",
+    performHeaderSearch
   );
 
   headerSearchInput.addEventListener(
-      "keydown",
-      (e) => {
+    "keydown",
+    (e) => {
 
-          if (e.key === "Enter") {
+      if (e.key === "Enter") {
 
-              e.preventDefault();
+        e.preventDefault();
 
-              performHeaderSearch();
-
-          }
+        performHeaderSearch();
 
       }
+
+    }
   );
   document.getElementById('clearSearchBtn').addEventListener('click', () => {
 
-      headerSearchInput.value = "";
+    headerSearchInput.value = "";
 
-      currentLedgerData = null;
+    currentLedgerData = null;
 
-      document.getElementById("searchResults").innerHTML =
-          '<p class="empty-state">Search a customer to view the complete ledger.</p>';
+    document.getElementById("searchResults").innerHTML =
+      '<p class="empty-state">Search a customer to view the complete ledger.</p>';
 
   });
 
@@ -1536,10 +1536,10 @@ function setupEventListeners() {
     document.getElementById('topupClearBtn');
 
   const paidupSearchBtn =
-      document.getElementById('paidupSearchBtn');
+    document.getElementById('paidupSearchBtn');
 
   const paidupClearBtn =
-      document.getElementById('paidupClearBtn');
+    document.getElementById('paidupClearBtn');
 
 
 
@@ -1675,7 +1675,7 @@ function setupEventListeners() {
       currentTopupRecord =
         await loadCustomerForTransaction(packetNo, party);
 
-        console.log(buildTransactionTimeline(currentTopupRecord));
+      console.log(buildTransactionTimeline(currentTopupRecord));
 
       if (!currentTopupRecord) {
 
@@ -1713,34 +1713,34 @@ function setupEventListeners() {
         currentTopupRecord.phoneNumber;
 
       const currentPrincipal =
-          getCurrentPrincipal(currentTopupRecord);
+        getCurrentPrincipal(currentTopupRecord);
 
       document.getElementById('topupCurrentAmount').value =
-          currentPrincipal;
+        currentPrincipal;
 
       document.getElementById('topupROI').value =
-          currentTopupRecord.rateOfInterest;
+        currentTopupRecord.rateOfInterest;
 
       document.getElementById('topupEntryDate').value =
-          currentTopupRecord.entryDate;
+        currentTopupRecord.entryDate;
 
       const params = new URLSearchParams({
-          party,
-          packetNo
+        party,
+        packetNo
       });
 
       const interestData = await apiRequest(
-          `/api/interest-payment/search?${params.toString()}`
+        `/api/interest-payment/search?${params.toString()}`
       );
 
       document.getElementById('topupLastInterestPaid').value =
-          interestData.lastInterestPaidTill || 'Interest not paid yet';
+        interestData.lastInterestPaidTill || 'Interest not paid yet';
 
       document.getElementById('principalBeforeTopup').value =
-          currentPrincipal;
+        currentPrincipal;
 
       document.getElementById('principalAfterTopup').value =
-          currentPrincipal;
+        currentPrincipal;
 
 
 
@@ -1833,34 +1833,34 @@ function setupEventListeners() {
         currentPaidupRecord.phoneNumber;
 
       const currentPrincipal =
-          getCurrentPrincipal(currentPaidupRecord);
+        getCurrentPrincipal(currentPaidupRecord);
 
       document.getElementById('paidupCurrentAmount').value =
-          currentPrincipal;
+        currentPrincipal;
 
       document.getElementById('paidupROI').value =
-          currentPaidupRecord.rateOfInterest;
+        currentPaidupRecord.rateOfInterest;
 
       document.getElementById('paidupEntryDate').value =
-          currentPaidupRecord.entryDate;
+        currentPaidupRecord.entryDate;
 
       const params = new URLSearchParams({
-          party,
-          packetNo
+        party,
+        packetNo
       });
 
       const interestData = await apiRequest(
-          `/api/interest-payment/search?${params.toString()}`
+        `/api/interest-payment/search?${params.toString()}`
       );
 
       document.getElementById('paidupLastInterestPaid').value =
-          interestData.lastInterestPaidTill || 'Interest not paid yet';
+        interestData.lastInterestPaidTill || 'Interest not paid yet';
 
       document.getElementById('principalBeforePaidup').value =
-          currentPrincipal;
+        currentPrincipal;
 
       document.getElementById('principalAfterPaidup').value =
-          currentPrincipal;
+        currentPrincipal;
 
 
 
@@ -1891,7 +1891,7 @@ function setupEventListeners() {
 
     }
 
-    });
+  });
   // ===============================
   // REPORTS
   // ===============================
@@ -1923,7 +1923,7 @@ function setupEventListeners() {
   let currentReportType = 'existing';
   let currentReportData = null;
 
-    // -------------------------------
+  // -------------------------------
   // Report Table Scroll Controls
   // -------------------------------
 
@@ -2666,8 +2666,8 @@ function setupEventListeners() {
 
           <strong>
             ${formatCurrency(
-              summary.principalReleased
-            )}
+        summary.principalReleased
+      )}
           </strong>
 
         </div>
@@ -2679,8 +2679,8 @@ function setupEventListeners() {
 
           <strong>
             ${formatCurrency(
-              summary.totalInterestTillRelease
-            )}
+        summary.totalInterestTillRelease
+      )}
           </strong>
 
         </div>
@@ -2692,8 +2692,8 @@ function setupEventListeners() {
 
           <strong>
             ${formatCurrency(
-              summary.interestAlreadyPaid
-            )}
+        summary.interestAlreadyPaid
+      )}
           </strong>
 
         </div>
@@ -2705,8 +2705,8 @@ function setupEventListeners() {
 
           <strong>
             ${formatCurrency(
-              summary.remainingInterestToPay
-            )}
+        summary.remainingInterestToPay
+      )}
           </strong>
 
         </div>
@@ -2718,8 +2718,8 @@ function setupEventListeners() {
 
           <strong>
             ${formatCurrency(
-              summary.totalRecoverable
-            )}
+        summary.totalRecoverable
+      )}
           </strong>
 
         </div>
@@ -2792,12 +2792,12 @@ function setupEventListeners() {
         <tbody>
 
           ${customers.map(
-            (customer, index) => {
+      (customer, index) => {
 
-              const record =
-                customer.record;
+        const record =
+          customer.record;
 
-              return `
+        return `
 
                 <tr>
 
@@ -2823,14 +2823,14 @@ function setupEventListeners() {
 
                   <td>
                     ${formatCurrency(
-                      customer.principalEntered
-                    )}
+          customer.principalEntered
+        )}
                   </td>
 
                   <td>
                     ${formatCurrency(
-                      customer.currentPrincipal
-                    )}
+          customer.currentPrincipal
+        )}
                   </td>
 
                   <td>
@@ -2839,34 +2839,34 @@ function setupEventListeners() {
 
                   <td>
                     ${formatCurrency(
-                      customer.interestAccrued
-                    )}
+          customer.interestAccrued
+        )}
                   </td>
 
                   <td>
                     ${formatCurrency(
-                      customer.interestPaid
-                    )}
+          customer.interestPaid
+        )}
                   </td>
 
                   <td>
                     ${formatCurrency(
-                      customer.pendingInterest
-                    )}
+          customer.pendingInterest
+        )}
                   </td>
 
                   <td>
                     ${formatCurrency(
-                      customer.totalRecoverable
-                    )}
+          customer.totalRecoverable
+        )}
                   </td>
 
                 </tr>
 
               `;
 
-            }
-          ).join('')}
+      }
+    ).join('')}
 
         </tbody>
 
@@ -2928,12 +2928,12 @@ function setupEventListeners() {
         <tbody>
 
           ${customers.map(
-            (customer, index) => {
+      (customer, index) => {
 
-              const record =
-                customer.record;
+        const record =
+          customer.record;
 
-              return `
+        return `
 
                 <tr>
 
@@ -2963,14 +2963,14 @@ function setupEventListeners() {
 
                   <td>
                     ${formatCurrency(
-                      customer.principalEntered
-                    )}
+          customer.principalEntered
+        )}
                   </td>
 
                   <td>
                     ${formatCurrency(
-                      customer.principalReleased
-                    )}
+          customer.principalReleased
+        )}
                   </td>
 
                   <td>
@@ -2979,34 +2979,34 @@ function setupEventListeners() {
 
                   <td>
                     ${formatCurrency(
-                      customer.totalInterestTillRelease
-                    )}
+          customer.totalInterestTillRelease
+        )}
                   </td>
 
                   <td>
                     ${formatCurrency(
-                      customer.interestAlreadyPaid
-                    )}
+          customer.interestAlreadyPaid
+        )}
                   </td>
 
                   <td>
                     ${formatCurrency(
-                      customer.remainingInterestToPay
-                    )}
+          customer.remainingInterestToPay
+        )}
                   </td>
 
                   <td>
                     ${formatCurrency(
-                      customer.totalRecoverable
-                    )}
+          customer.totalRecoverable
+        )}
                   </td>
 
                 </tr>
 
               `;
 
-            }
-          ).join('')}
+      }
+    ).join('')}
 
         </tbody>
 
@@ -3258,8 +3258,7 @@ function setupEventListeners() {
     pdf.setFontSize(9);
 
     pdf.text(
-      `Party: ${
-        document.getElementById("partySelect").value
+      `Party: ${document.getElementById("partySelect").value
       }`,
       margin,
       margin + 17
@@ -3267,8 +3266,7 @@ function setupEventListeners() {
 
 
     pdf.text(
-      `Calculated Till: ${
-        formatDate(reportDateInput.value)
+      `Calculated Till: ${formatDate(reportDateInput.value)
       }`,
       pageWidth - margin,
       margin + 17,
@@ -3293,35 +3291,35 @@ function setupEventListeners() {
 
       summaryRows = [
 
-          [
-              "Customers",
-              String(summary.customerCount)
-          ],
+        [
+          "Customers",
+          String(summary.customerCount)
+        ],
 
-          [
-              "Principal",
-              formatPdfCurrency(summary.principal)
-          ],
+        [
+          "Principal",
+          formatPdfCurrency(summary.principal)
+        ],
 
-          [
-              "Interest Accrued",
-              formatPdfCurrency(summary.interestAccrued)
-          ],
+        [
+          "Interest Accrued",
+          formatPdfCurrency(summary.interestAccrued)
+        ],
 
-          [
-              "Interest Paid",
-              formatPdfCurrency(summary.interestPaid)
-          ],
+        [
+          "Interest Paid",
+          formatPdfCurrency(summary.interestPaid)
+        ],
 
-          [
-              "Pending Interest",
-              formatPdfCurrency(summary.pendingInterest)
-          ],
+        [
+          "Pending Interest",
+          formatPdfCurrency(summary.pendingInterest)
+        ],
 
-          [
-              "Total Recoverable",
-              formatPdfCurrency(summary.totalRecoverable)
-          ]
+        [
+          "Total Recoverable",
+          formatPdfCurrency(summary.totalRecoverable)
+        ]
 
       ];
 
@@ -3684,8 +3682,7 @@ function setupEventListeners() {
         pdf.setFontSize(8);
 
         pdf.text(
-          `Page ${
-            pdf.internal.getNumberOfPages()
+          `Page ${pdf.internal.getNumberOfPages()
           }`,
           pageWidth - margin,
           pageHeight - 5,
@@ -3871,6 +3868,10 @@ function setupEventListeners() {
         normalBtn.classList.add('active');
       }
 
+    }
+    // Reload Reports whenever the Reports tab is opened
+    if (tabId === 'reports') {
+      loadReport();
     }
   }
 
@@ -4483,21 +4484,21 @@ function setupEventListeners() {
 
     catch (err) {
 
-        document.getElementById('totalInterestTillRelease').value = '';
+      document.getElementById('totalInterestTillRelease').value = '';
 
-        document.getElementById('interestAlreadyPaid').value = '';
+      document.getElementById('interestAlreadyPaid').value = '';
 
-        document.getElementById('interestToBePaid').value = '';
+      document.getElementById('interestToBePaid').value = '';
 
-        document.getElementById('totalRecoverable').value = '';
+      document.getElementById('totalRecoverable').value = '';
 
-        document.getElementById('totalAmountWithInterest').value = '';
+      document.getElementById('totalAmountWithInterest').value = '';
 
-        showMessage(
-            releaseMessage,
-            err.message,
-            'error'
-        );
+      showMessage(
+        releaseMessage,
+        err.message,
+        'error'
+      );
 
     }
 
@@ -4574,10 +4575,10 @@ function setupEventListeners() {
         data.record.customerName;
 
       const currentPrincipal =
-          getCurrentPrincipal(data.record);
+        getCurrentPrincipal(data.record);
 
       document.getElementById('ipAmount').value =
-          currentPrincipal;
+        currentPrincipal;
 
       document.getElementById('ipROI').value =
         data.record.rateOfInterest;
@@ -4597,17 +4598,17 @@ function setupEventListeners() {
 
       if (data.lastInterestPaidTill) {
 
-          const nextDate = new Date(data.lastInterestPaidTill);
-          nextDate.setDate(nextDate.getDate() + 1);
+        const nextDate = new Date(data.lastInterestPaidTill);
+        nextDate.setDate(nextDate.getDate() + 1);
 
-          interestStartDate =
-              nextDate.toISOString().split('T')[0];
+        interestStartDate =
+          nextDate.toISOString().split('T')[0];
 
       }
       else {
 
-          interestStartDate =
-              data.record.entryDate;
+        interestStartDate =
+          data.record.entryDate;
 
       }
 
@@ -4693,9 +4694,9 @@ function setupEventListeners() {
       `${formatDate(startDate)} → ${formatDate(paidTill)}`;
 
     const interest = calculateInterestForPeriod(
-        currentInterestRecord,
-        startDate,
-        paidTill
+      currentInterestRecord,
+      startDate,
+      paidTill
     );
 
     document.getElementById('interestAmount').value =
@@ -4706,143 +4707,143 @@ function setupEventListeners() {
 
   topupForm.addEventListener('submit', async (e) => {
 
-      e.preventDefault();
+    e.preventDefault();
 
-      if (!currentTopupRecord) {
+    if (!currentTopupRecord) {
 
-          showMessage(
-              topupMessage,
-              'Search customer first.',
-              'error'
-          );
+      showMessage(
+        topupMessage,
+        'Search customer first.',
+        'error'
+      );
 
-          return;
+      return;
 
-      }
+    }
 
-      const payload = {
+    const payload = {
 
-          party: document.getElementById('partySelect').value,
+      party: document.getElementById('partySelect').value,
 
-          packetNo: Number(
-              document.getElementById('topupPacketNo').value
-          ),
+      packetNo: Number(
+        document.getElementById('topupPacketNo').value
+      ),
 
-          amount: Number(
-              document.getElementById('topupAmount').value
-          ),
+      amount: Number(
+        document.getElementById('topupAmount').value
+      ),
 
-          date: document.getElementById('topupDate').value
+      date: document.getElementById('topupDate').value
 
-      };
+    };
 
-      try {
+    try {
 
-          const result = await apiRequest(
-              '/api/records/topup',
-              {
-                  method: 'POST',
-                  body: JSON.stringify(payload)
-              }
-          );
+      const result = await apiRequest(
+        '/api/records/topup',
+        {
+          method: 'POST',
+          body: JSON.stringify(payload)
+        }
+      );
 
-          currentTopupRecord = result.record;
+      currentTopupRecord = result.record;
 
-          renderTopupHistory(currentTopupRecord);
+      renderTopupHistory(currentTopupRecord);
 
-          showMessage(
-              topupMessage,
-              'Top-Up saved successfully.',
-              'success'
-          );
+      showMessage(
+        topupMessage,
+        'Top-Up saved successfully.',
+        'success'
+      );
 
-      }
+    }
 
-      catch (err) {
+    catch (err) {
 
-          showMessage(
-              topupMessage,
-              err.message,
-              'error'
-          );
+      showMessage(
+        topupMessage,
+        err.message,
+        'error'
+      );
 
-      }
+    }
 
   });
 
 
   paidupForm.addEventListener('submit', async (e) => {
 
-      e.preventDefault();
+    e.preventDefault();
 
-      if (!currentPaidupRecord) {
+    if (!currentPaidupRecord) {
 
-          showMessage(
-              paidupMessage,
-              'Search customer first.',
-              'error'
-          );
+      showMessage(
+        paidupMessage,
+        'Search customer first.',
+        'error'
+      );
 
-          return;
+      return;
 
-      }
+    }
 
-      const payload = {
+    const payload = {
 
-          party: document.getElementById('partySelect').value,
+      party: document.getElementById('partySelect').value,
 
-          packetNo: Number(
-              document.getElementById('paidupPacketNo').value
-          ),
+      packetNo: Number(
+        document.getElementById('paidupPacketNo').value
+      ),
 
-          amount: Number(
-              document.getElementById('paidupAmount').value
-          ),
+      amount: Number(
+        document.getElementById('paidupAmount').value
+      ),
 
-          date: document.getElementById('paidupDate').value
+      date: document.getElementById('paidupDate').value
 
-      };
+    };
 
-      try {
+    try {
 
-          const result = await apiRequest(
-              '/api/records/paidup',
-              {
-                  method: 'POST',
-                  body: JSON.stringify(payload)
-              }
-          );
+      const result = await apiRequest(
+        '/api/records/paidup',
+        {
+          method: 'POST',
+          body: JSON.stringify(payload)
+        }
+      );
 
-          currentPaidupRecord = result.record;
+      currentPaidupRecord = result.record;
 
-          const currentPrincipal =
-              getCurrentPrincipal(currentPaidupRecord);
+      const currentPrincipal =
+        getCurrentPrincipal(currentPaidupRecord);
 
-          document.getElementById('principalBeforePaidup').value =
-              currentPrincipal;
+      document.getElementById('principalBeforePaidup').value =
+        currentPrincipal;
 
-          document.getElementById('principalAfterPaidup').value =
-              currentPrincipal;
+      document.getElementById('principalAfterPaidup').value =
+        currentPrincipal;
 
-          renderPaidupHistory(currentPaidupRecord);
+      renderPaidupHistory(currentPaidupRecord);
 
-          showMessage(
-              paidupMessage,
-              'Paid-Up saved successfully.',
-              'success'
-          );
+      showMessage(
+        paidupMessage,
+        'Paid-Up saved successfully.',
+        'success'
+      );
 
-      }
+    }
 
-      catch (err) {
+    catch (err) {
 
-          showMessage(
-              paidupMessage,
-              err.message,
-              'error'
-          );
+      showMessage(
+        paidupMessage,
+        err.message,
+        'error'
+      );
 
-      }
+    }
 
   });
 
