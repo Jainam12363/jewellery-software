@@ -2007,69 +2007,26 @@ function setupEventListeners() {
     }
 
 
-    const hasTable =
-      reportTableContainer.querySelector(
-        '.report-table'
-      );
+    const hasTable = reportTableContainer.querySelector('.report-table');
 
-
-    // No table currently displayed
     if (!hasTable) {
-
-      reportScrollLeftBtn.style.visibility =
-        'hidden';
-
-      reportScrollRightBtn.style.visibility =
-        'hidden';
-
+      reportScrollLeftBtn.style.visibility = 'hidden';
+      reportScrollRightBtn.style.visibility = 'hidden';
       return;
     }
 
+    // Keep both arrows visible whenever a report table exists.
+    reportScrollLeftBtn.style.visibility = 'visible';
+    reportScrollRightBtn.style.visibility = 'visible';
 
     const maxScrollLeft =
       reportTableContainer.scrollWidth -
       reportTableContainer.clientWidth;
 
-    console.log(
-      'Table scroll:',
-      reportTableContainer.scrollLeft,
-      reportTableContainer.scrollWidth,
-      reportTableContainer.clientWidth
-    );
+    const currentScroll = reportTableContainer.scrollLeft;
 
-
-    // Table fits completely — no horizontal
-    // scrolling is required
-    if (maxScrollLeft <= 1) {
-
-      reportScrollLeftBtn.style.visibility =
-        'hidden';
-
-      reportScrollRightBtn.style.visibility =
-        'hidden';
-
-      return;
-    }
-
-
-    // Table needs horizontal scrolling
-    reportScrollLeftBtn.style.visibility =
-      'visible';
-
-    reportScrollRightBtn.style.visibility =
-      'visible';
-
-
-    const currentScroll =
-      reportTableContainer.scrollLeft;
-
-
-    // Disable left arrow at the beginning
-    reportScrollLeftBtn.disabled =
-      currentScroll <= 1;
-
-
-    // Disable right arrow at the end
+    // Disable an arrow when it cannot scroll any farther.
+    reportScrollLeftBtn.disabled = currentScroll <= 1;
     reportScrollRightBtn.disabled =
       currentScroll >= maxScrollLeft - 1;
   }
