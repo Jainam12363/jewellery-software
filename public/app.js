@@ -2593,7 +2593,7 @@ function setupEventListeners() {
 
         <div class="report-summary-card">
 
-          <span>Principal</span>
+          <span>Current Principal</span>
 
           <strong>
             ${formatCurrency(summary.principal)}
