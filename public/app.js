@@ -2267,37 +2267,38 @@ function setupEventListeners() {
   ) {
 
     const existingRecords =
-      records.filter(record => {
+      records
+        .filter(record => {
 
-        // Customer must have entered on or before
-        // the selected report date.
-        if (
-          new Date(record.entryDate) >
-          new Date(reportDate)
-        ) {
-          return false;
-        }
-
-
-        // If the customer was released before or
-        // on the selected date, they are not existing
-        // as of that date.
-        if (
-          record.releaseDate &&
-          record.releaseDate !== '' &&
-          new Date(record.releaseDate) <=
-          new Date(reportDate)
-        ) {
-          return false;
-        }
+          // Customer must have entered on or before
+          // the selected report date.
+          if (
+            new Date(record.entryDate) >
+            new Date(reportDate)
+          ) {
+            return false;
+          }
 
 
-        // Otherwise, the customer was existing
-        // as of the selected report date.
-        return true;
+          // If the customer was released before or
+          // on the selected date, they are not existing
+          // as of that date.
+          if (
+            record.releaseDate &&
+            record.releaseDate !== '' &&
+            new Date(record.releaseDate) <=
+            new Date(reportDate)
+          ) {
+            return false;
+          }
 
-      });
 
+          // Otherwise, the customer was existing
+          // as of the selected report date.
+          return true;
+
+        })
+        .sort((a, b) => Number(a.packetNo) - Number(b.packetNo));
 
     let totalPrincipal =
       0;
@@ -2421,22 +2422,24 @@ function setupEventListeners() {
   ) {
 
     const releasedRecords =
-      records.filter(record => {
+      records
+        .filter(record => {
 
-        if (record.status !== 'RELEASED') {
-          return false;
-        }
+          if (record.status !== 'RELEASED') {
+            return false;
+          }
 
-        if (!record.releaseDate) {
-          return false;
-        }
+          if (!record.releaseDate) {
+            return false;
+          }
 
-        return (
-          new Date(record.releaseDate) <=
-          new Date(reportDate)
-        );
+          return (
+            new Date(record.releaseDate) <=
+            new Date(reportDate)
+          );
 
-      });
+        })
+        .sort((a, b) => Number(a.packetNo) - Number(b.packetNo));
 
 
     let totalPrincipalReleased = 0;
